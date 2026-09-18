@@ -18,8 +18,11 @@ class STTService:
             data = file.read()
 
         headers = {"Authorization": f"Bearer {hf_token}"}
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(API_URL, headers=headers, data=data)
+        try:
+            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+                response = await client.post(API_URL, headers=headers, data=data)
+        except httpx.RequestError as exc:
+            raise RuntimeError(f"HF STT connection failed: {exc}") from exc
 
         if response.status_code != 200:
             raise RuntimeError(f"HF STT Error: {response.text}")
