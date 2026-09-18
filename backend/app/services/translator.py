@@ -22,7 +22,7 @@ async def translate_and_summarize(
         if not filename:
             raise ValueError("Audio filename is required when processing uploaded audio.")
 
-        transcript = SpeechService.transcribe_file(
+        transcript = await SpeechService.transcribe_file(
             audio_bytes=audio_bytes,
             filename=filename,
             language=LanguageService.normalize_code(source_language),
