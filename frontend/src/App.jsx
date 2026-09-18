@@ -5,7 +5,7 @@ import {
   Menu, Mic, Paperclip, Plus, Search, Sparkles, Trash2, Volume2, X,
 } from 'lucide-react';
 
-const API_BASE_URL = 'http://localhost:8000';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://virtual-ai-translator.onrender.com';
 const STORAGE_KEY = 'aura-translate-sessions';
 const languages = [
   ['auto', 'Auto-detect'], ['es', 'Spanish'], ['fr', 'French'], ['de', 'German'], ['it', 'Italian'],
