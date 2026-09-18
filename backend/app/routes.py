@@ -1,0 +1,75 @@
+import asyncio
+
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+
+from app.schemas import TranslationRequest, TranslationResponse
+from app.services.language import LanguageService
+from app.services.summarizer import SummarizerService
+from app.services.translation import TranslationService
+from app.services.translator import translate_and_summarize
+
+router = APIRouter(prefix="/api", tags=["translator"])
+
+
+@router.post("/translate", response_model=TranslationResponse)
+async def translate_endpoint(request: TranslationRequest):
+    source_language = getattr(request, "source_lang", request.source_language)
+    try:
+        detected_language = LanguageService.normalize_code(source_language)
+        if detected_language is None:
+            detected_language = await asyncio.wait_for(
+                asyncio.to_thread(LanguageService.detect, request.text),
+                timeout=15.0,
+            )
+
+        translated_text = await asyncio.wait_for(
+            asyncio.to_thread(
+                TranslationService.translate_to_english,
+                request.text,
+                detected_language,
+            ),
+            timeout=15.0,
+        )
+    except Exception:
+        translated_text = request.text.strip()
+
+    try:
+        summary = await asyncio.wait_for(
+            asyncio.to_thread(SummarizerService.summarize, translated_text),
+            timeout=15.0,
+        )
+    except Exception as exc:
+        summary = f"Summary unavailable: {exc}"
+
+    fallback_language = LanguageService.normalize_code(source_language) or "en"
+    return {
+        "detected_language": LanguageService.display_name(fallback_language),
+        "original_text": request.text.strip(),
+        "english_translation": translated_text.strip(),
+        "summary": summary.strip(),
+    }
+
+
+@router.post("/audio", response_model=TranslationResponse)
+async def transcribe_audio(
+    file: UploadFile = File(...),
+    source_language: str | None = Form(default=None),
+):
+    try:
+        if not file.filename:
+            raise ValueError("No audio file uploaded.")
+
+        content = await file.read()
+        result = await translate_and_summarize(
+            text="",
+            source_language=source_language,
+            audio_bytes=content,
+            filename=file.filename,
+        )
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
