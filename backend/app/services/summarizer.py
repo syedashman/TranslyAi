@@ -1,5 +1,4 @@
 import os
-import time
 from typing import Optional
 
 from google import genai
@@ -7,13 +6,17 @@ from google.genai import errors, types
 
 from app.config import settings
 
+GEMINI_MODELS = [
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+    "gemini-3.1-flash-lite",
+    "gemini-2.5-flash-lite",
+]
+
 
 class SummarizerService:
     _client: Optional[genai.Client] = None
     _fallback_message = "Summary is unavailable right now. Please try again later."
-    _primary_model = "gemini-3.6-flash"
-    _fallback_model = "gemini-3.5-flash"
-    _max_retries = 3
     _generation_config = types.GenerateContentConfig(
         tools=[],
         automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
@@ -42,57 +45,36 @@ class SummarizerService:
             return False
 
     @staticmethod
-    def _is_retryable(error: Exception) -> bool:
-        if not isinstance(error, errors.ServerError):
-            return False
-        if error.code == 503:
-            return True
-        status = (error.status or "").upper()
-        message = (error.message or "").lower()
-        return status == "UNAVAILABLE" or "high demand" in message or "overloaded" in message
+    def _should_try_next_model(error: Exception) -> bool:
+        # 429 (rate limit), 503 (high demand) and 404 (model retired) are model-specific,
+        # so the next model may succeed. Other 4xx errors (bad key, bad request) would fail everywhere.
+        if isinstance(error, errors.ClientError):
+            return error.code in (404, 429)
+        return True
 
     @classmethod
     def generate_with_retry(cls, prompt: str) -> str:
-        """Call Gemini with exponential backoff, falling back to a secondary model.
-
-        Runs synchronously and is only ever invoked off the event loop (via
-        asyncio.to_thread / a ThreadPoolExecutor), so time.sleep is used for the
-        backoff delay rather than asyncio.sleep, which would require an event loop
-        on the calling thread.
-        """
+        """Try each model in GEMINI_MODELS in order, moving to the next one immediately on failure."""
         if not cls.initialize():
             raise RuntimeError("Gemini client is not configured.")
 
         last_error: Optional[Exception] = None
 
-        for attempt in range(1, cls._max_retries + 1):
+        for model in GEMINI_MODELS:
             try:
                 response = cls._client.models.generate_content(
-                    model=cls._primary_model,
+                    model=model,
                     contents=prompt,
                     config=cls._generation_config,
                 )
                 return response.text.strip()
             except Exception as error:
                 last_error = error
-                print(
-                    f"GEMINI GENERATE ERROR ({cls._primary_model}, "
-                    f"attempt {attempt}/{cls._max_retries}): {error}"
-                )
-                if not cls._is_retryable(error) or attempt == cls._max_retries:
+                print(f"GEMINI GENERATE ERROR ({model}): {error}")
+                if not cls._should_try_next_model(error):
                     break
-                time.sleep(1 if attempt == 1 else 2)
 
-        try:
-            response = cls._client.models.generate_content(
-                model=cls._fallback_model,
-                contents=prompt,
-                config=cls._generation_config,
-            )
-            return response.text.strip()
-        except Exception as error:
-            print(f"GEMINI GENERATE ERROR ({cls._fallback_model}): {error}")
-            raise RuntimeError(str(error)) from error
+        raise RuntimeError(f"All Gemini models failed: {last_error}") from last_error
 
     @classmethod
     def summarize(cls, text: str) -> str:
