@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     backend_port: int = 8000
     gemini_api_key: str = ""
     hf_api_key: str = ""
+    groq_api_key: str = ""
     whisper_model: str = "small"
     nllb_model: str = "facebook/nllb-200-distilled-600M"
     supabase_url: str = ""

@@ -68,8 +68,11 @@ async def transcribe_audio(
         )
         return result
     except ValueError as exc:
+        print(f"AUDIO ENDPOINT VALUE ERROR: {exc}")
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
+        print(f"AUDIO ENDPOINT RUNTIME ERROR: {exc}")
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
+        print(f"AUDIO ENDPOINT ERROR: {exc}")
         raise HTTPException(status_code=500, detail=str(exc)) from exc

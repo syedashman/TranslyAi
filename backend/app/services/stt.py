@@ -2,20 +2,29 @@ import os
 
 from groq import Groq
 
+from app.config import settings
+
 
 class STTService:
     @classmethod
     async def transcribe(cls, file_path: str) -> str:
+        if not os.getenv("GROQ_API_KEY") and settings.groq_api_key.strip():
+            os.environ["GROQ_API_KEY"] = settings.groq_api_key
+
         groq_api_key = os.getenv("GROQ_API_KEY")
         if not groq_api_key:
             raise Exception("GROQ_API_KEY environment variable is missing")
 
         client = Groq(api_key=groq_api_key)
 
-        with open(file_path, "rb") as file:
-            transcription = client.audio.transcriptions.create(
-                file=(os.path.basename(file_path), file.read()),
-                model="whisper-large-v3-turbo",
-                response_format="text",
-            )
-        return str(transcription)
+        try:
+            with open(file_path, "rb") as file:
+                transcription = client.audio.transcriptions.create(
+                    file=(os.path.basename(file_path), file.read()),
+                    model="whisper-large-v3-turbo",
+                    response_format="text",
+                )
+            return str(transcription)
+        except Exception as error:
+            print(f"GROQ STT ERROR: {error}")
+            raise
