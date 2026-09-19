@@ -1,13 +1,38 @@
+import gc
+import logging
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.config import settings
 from app.routes import router
+
+logger = logging.getLogger("ai-translator")
+logging.basicConfig(level=logging.INFO)
+
+
+def _log_memory_usage(label: str) -> None:
+    try:
+        import resource
+
+        rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+        logger.info("MEMORY USAGE (%s): %.2f MB", label, rss_mb)
+    except Exception as exc:
+        logger.info("MEMORY USAGE (%s): unavailable (%s)", label, exc)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    gc.collect()
+    _log_memory_usage("startup")
+    yield
+
 
 app = FastAPI(
     title="AI Translator API",
     description="Multilingual transcription, translation, and summarization API.",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
