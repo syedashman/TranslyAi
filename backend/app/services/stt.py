@@ -1,36 +1,31 @@
+import asyncio
 import os
 
-import httpx
+import requests
 
 from app.config import settings
 
-API_URL = "https://router.huggingface.co/hf-inference/v1/audio/transcriptions"
-LEGACY_API_URL = "https://api-inference.huggingface.co/models/openai/whisper-large-v3-turbo"
+API_URL = "https://api-inference.huggingface.co/models/openai/whisper-large-v3-turbo"
 
 
 class STTService:
     @classmethod
     async def transcribe(cls, file_path: str) -> str:
-        hf_token = settings.hf_api_key or os.environ.get("HF_API_KEY")
+        hf_token = os.getenv("HF_API_KEY") or settings.hf_api_key
         if not hf_token:
-            raise RuntimeError("HF_API_KEY is not configured for audio transcription.")
+            raise RuntimeError("HF_API_KEY environment variable is missing")
 
         headers = {"Authorization": f"Bearer {hf_token}"}
-        try:
-            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-                with open(file_path, "rb") as file:
-                    files = {"file": (os.path.basename(file_path), file, "audio/webm")}
-                    data = {"model": "openai/whisper-large-v3-turbo"}
-                    response = await client.post(API_URL, headers=headers, files=files, data=data)
 
-                if response.status_code != 200:
-                    with open(file_path, "rb") as file:
-                        response = await client.post(
-                            LEGACY_API_URL,
-                            headers=headers,
-                            content=file.read(),
-                        )
-        except (OSError, httpx.RequestError) as exc:
+        def _sync_post():
+            with open(file_path, "rb") as file:
+                data = file.read()
+            return requests.post(API_URL, headers=headers, data=data, timeout=30)
+
+        loop = asyncio.get_event_loop()
+        try:
+            response = await loop.run_in_executor(None, _sync_post)
+        except (OSError, requests.RequestException) as exc:
             raise RuntimeError(f"HF STT connection failed: {exc}") from exc
 
         if response.status_code != 200:
