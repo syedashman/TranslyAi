@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 import {
   Archive, ArrowUp, CircleStop, ChevronDown, Copy, Languages, LoaderCircle,
-  Menu, Mic, Paperclip, Plus, Search, Sparkles, Trash2, Volume2, X,
+  LogOut, Menu, Mic, Paperclip, Plus, Search, Sparkles, Trash2, Volume2, X,
 } from 'lucide-react';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://virtual-ai-translator.onrender.com';
@@ -17,9 +17,10 @@ const languages = [
 
 const makeSession = () => ({ id: crypto.randomUUID(), title: 'New conversation', createdAt: Date.now(), messages: [] });
 
-function App() {
-  const [sessions, setSessions] = useState(() => loadSessions());
-  const [activeId, setActiveId] = useState(() => loadSessions()[0]?.id || null);
+function App({ user, onSignOut }) {
+  const storageKey = `${STORAGE_KEY}:${user.id}`;
+  const [sessions, setSessions] = useState(() => loadSessions(storageKey));
+  const [activeId, setActiveId] = useState(() => loadSessions(storageKey)[0]?.id || null);
   const [text, setText] = useState('');
   const [sourceLanguage, setSourceLanguage] = useState('auto');
   const [isLoading, setIsLoading] = useState(false);
@@ -36,7 +37,7 @@ function App() {
 
   useEffect(() => {
     if (sessions.length && !sessions.some((session) => session.id === activeId)) setActiveId(sessions[0].id);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
+    localStorage.setItem(storageKey, JSON.stringify(sessions));
   }, [sessions, activeId]);
 
   useEffect(() => {
@@ -137,27 +138,27 @@ function App() {
 
   return (
     <div className="app-shell">
-      <Sidebar sessions={sessions} activeId={activeId} health={health} isOpen={sidebarOpen} onNew={createNewChat} onSelect={(id) => { setActiveId(id); setSidebarOpen(false); }} onDelete={deleteSession} />
+      <Sidebar sessions={sessions} activeId={activeId} health={health} isOpen={sidebarOpen} user={user} onSignOut={onSignOut} onNew={createNewChat} onSelect={(id) => { setActiveId(id); setSidebarOpen(false); }} onDelete={deleteSession} />
       <main className="chat-layout">
         <header className="topbar"><button type="button" className="icon-button mobile-menu" onClick={() => setSidebarOpen(true)} aria-label="Open sidebar"><Menu size={19} /></button><div className="mobile-title"><Sparkles size={16} /><span>{activeSession?.title || 'New conversation'}</span></div><div className="topbar-actions"><button type="button" className="icon-button" aria-label="Search conversations"><Search size={17} /></button><button type="button" className="icon-button" aria-label="Conversation options"><Archive size={17} /></button></div></header>
         <section className="conversation" aria-live="polite">
           {activeSession?.messages.length ? activeSession.messages.map((message) => <Message key={message.id} message={message} />) : <EmptyState onPrompt={(prompt) => setText(prompt)} />}
           {isLoading && <div className="message-row assistant-row"><div className="avatar assistant-avatar"><Sparkles size={15} /></div><div className="typing"><span /><span /><span /></div></div>}
         </section>
-        <div className="composer-wrap"><form className="composer" onSubmit={submitText}>{audioFile && <div className="attachment-chip"><Paperclip size={13} />{shortenFileName(audioFile.name)}<button type="button" onClick={() => setAudioFile(null)} aria-label="Remove attachment"><X size={13} /></button></div>}<textarea ref={textareaRef} value={text} onChange={(event) => { setText(event.target.value); resizeTextarea(event.target); }} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submitText(event); } }} rows={1} placeholder="Message Aura Translate..." aria-label="Message" /><div className="composer-controls"><div className="composer-tools"><input ref={fileInputRef} type="file" accept="audio/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) { setAudioFile(file); setError(''); } event.target.value = ''; }} hidden /><button type="button" className="tool-button" onClick={() => fileInputRef.current?.click()} aria-label="Attach audio"><Paperclip size={18} /></button><button type="button" className={`tool-button ${isRecording ? 'recording' : ''}`} onClick={handleRecording} aria-label={isRecording ? 'Stop recording' : 'Record audio'}>{isRecording ? <CircleStop size={18} /> : <Mic size={18} />}</button><label className="language-select"><Languages size={14} /><select value={sourceLanguage} onChange={(event) => setSourceLanguage(event.target.value)} aria-label="Source language">{languages.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><ChevronDown size={13} /></label></div><button type="submit" className="send-button" disabled={isLoading || (!text.trim() && !audioFile)} aria-label="Send message">{isLoading ? <LoaderCircle size={18} className="spin" /> : <ArrowUp size={18} />}</button></div></form>{error && <div className="error-line"><X size={14} />{error}</div>}<p className="composer-note">Aura can make mistakes. Check important translations.</p></div>
+        <div className="composer-wrap"><form className="composer" onSubmit={submitText}>{audioFile && <div className="attachment-chip"><Paperclip size={13} />{shortenFileName(audioFile.name)}<button type="button" onClick={() => setAudioFile(null)} aria-label="Remove attachment"><X size={13} /></button></div>}<textarea ref={textareaRef} value={text} onChange={(event) => { setText(event.target.value); resizeTextarea(event.target); }} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submitText(event); } }} rows={1} placeholder="Message LinguaAI..." aria-label="Message" /><div className="composer-controls"><div className="composer-tools"><input ref={fileInputRef} type="file" accept="audio/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) { setAudioFile(file); setError(''); } event.target.value = ''; }} hidden /><button type="button" className="tool-button" onClick={() => fileInputRef.current?.click()} aria-label="Attach audio"><Paperclip size={18} /></button><button type="button" className={`tool-button ${isRecording ? 'recording' : ''}`} onClick={handleRecording} aria-label={isRecording ? 'Stop recording' : 'Record audio'}>{isRecording ? <CircleStop size={18} /> : <Mic size={18} />}</button><label className="language-select"><Languages size={14} /><select value={sourceLanguage} onChange={(event) => setSourceLanguage(event.target.value)} aria-label="Source language">{languages.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><ChevronDown size={13} /></label></div><button type="submit" className="send-button" disabled={isLoading || (!text.trim() && !audioFile)} aria-label="Send message">{isLoading ? <LoaderCircle size={18} className="spin" /> : <ArrowUp size={18} />}</button></div></form>{error && <div className="error-line"><X size={14} />{error}</div>}<p className="composer-note">LinguaAI can make mistakes. Check important translations.</p></div>
       </main>
     </div>
   );
 }
 
-function Sidebar({ sessions, activeId, health, isOpen, onNew, onSelect, onDelete }) {
-  return <aside className={`sidebar ${isOpen ? 'sidebar-open' : ''}`}><div className="sidebar-header"><div className="brand"><div className="brand-mark"><Sparkles size={16} /></div><span>Aura Translate</span></div><button type="button" className="icon-button sidebar-close" onClick={() => onSelect(activeId)} aria-label="Close sidebar"><X size={18} /></button></div><button type="button" className="new-chat-button" onClick={onNew}><Plus size={17} />New chat</button><div className="history-label">Your conversations</div><nav className="session-list">{sessions.length ? sessions.map((session) => <div key={session.id} className={`session-item ${session.id === activeId ? 'active' : ''}`}><button type="button" className="session-select" onClick={() => onSelect(session.id)}><span className="session-icon"><Languages size={15} /></span><span>{session.title}</span></button><button type="button" className="delete-button" onClick={() => onDelete(session.id)} aria-label={`Delete ${session.title}`}><Trash2 size={14} /></button></div>) : <p className="empty-history">Your saved chats will appear here.</p>}</nav><div className="sidebar-footer"><div className={`status-dot ${health}`} /><span>{health === 'connected' ? 'Backend connected' : health === 'checking' ? 'Checking connection' : 'Backend offline'}</span></div></aside>;
+function Sidebar({ sessions, activeId, health, isOpen, user, onSignOut, onNew, onSelect, onDelete }) {
+  return <aside className={`sidebar ${isOpen ? 'sidebar-open' : ''}`}><div className="sidebar-header"><div className="brand"><div className="brand-mark"><Sparkles size={16} /></div><span>LinguaAI</span></div><button type="button" className="icon-button sidebar-close" onClick={() => onSelect(activeId)} aria-label="Close sidebar"><X size={18} /></button></div><button type="button" className="new-chat-button" onClick={onNew}><Plus size={17} />New chat</button><div className="history-label">Your conversations</div><nav className="session-list">{sessions.length ? sessions.map((session) => <div key={session.id} className={`session-item ${session.id === activeId ? 'active' : ''}`}><button type="button" className="session-select" onClick={() => onSelect(session.id)}><span className="session-icon"><Languages size={15} /></span><span>{session.title}</span></button><button type="button" className="delete-button" onClick={() => onDelete(session.id)} aria-label={`Delete ${session.title}`}><Trash2 size={14} /></button></div>) : <p className="empty-history">Your saved chats will appear here.</p>}</nav><div className="account-row"><div className="account-avatar">{user.avatarUrl ? <img src={user.avatarUrl} alt="" referrerPolicy="no-referrer" /> : user.name.charAt(0).toUpperCase()}</div><div className="account-info"><strong>{user.name}</strong><span>{user.email}</span></div><button type="button" className="icon-button" onClick={onSignOut} aria-label="Log out" title="Log out"><LogOut size={16} /></button></div><div className="sidebar-footer"><div className={`status-dot ${health}`} /><span>{health === 'connected' ? 'Backend connected' : health === 'checking' ? 'Checking connection' : 'Backend offline'}</span></div></aside>;
 }
 
 function Message({ message }) {
   if (message.role === 'user') return <div className="message-row user-row"><div className="user-bubble">{message.audioName && <span className="audio-badge"><Paperclip size={13} />{shortenFileName(message.audioName)}</span>}{message.content}</div></div>;
   const { result } = message;
-  return <div className="message-row assistant-row"><div className="avatar assistant-avatar"><Sparkles size={15} /></div><div className="assistant-content"><div className="assistant-label">Aura Translate <span>· just now</span></div><div className="translation-card"><div className="result-heading"><span>English translation</span><button type="button" className="mini-action" aria-label="Copy translation" onClick={() => navigator.clipboard?.writeText(result.english_translation)}><Copy size={14} /></button></div><p>{result.english_translation}</p></div><div className="summary-card"><div className="summary-heading"><Sparkles size={14} />Claude summary</div><p>{result.summary}</p></div><div className="message-actions"><button type="button" aria-label="Read translation aloud"><Volume2 size={14} /></button><button type="button" aria-label="Copy response" onClick={() => navigator.clipboard?.writeText(`${result.english_translation}\n\n${result.summary}`)}><Copy size={14} /></button></div></div></div>;
+  return <div className="message-row assistant-row"><div className="avatar assistant-avatar"><Sparkles size={15} /></div><div className="assistant-content"><div className="assistant-label">LinguaAI <span>· just now</span></div><div className="translation-card"><div className="result-heading"><span>English translation</span><button type="button" className="mini-action" aria-label="Copy translation" onClick={() => navigator.clipboard?.writeText(result.english_translation)}><Copy size={14} /></button></div><p>{result.english_translation}</p></div><div className="summary-card"><div className="summary-heading"><Sparkles size={14} />Claude summary</div><p>{result.summary}</p></div><div className="message-actions"><button type="button" aria-label="Read translation aloud"><Volume2 size={14} /></button><button type="button" aria-label="Copy response" onClick={() => navigator.clipboard?.writeText(`${result.english_translation}\n\n${result.summary}`)}><Copy size={14} /></button></div></div></div>;
 }
 
 function EmptyState({ onPrompt }) {
@@ -176,7 +177,16 @@ function shortenFileName(name, max = 22) {
   return `${name.slice(0, max - ext.length - 3).trimEnd()}...${ext}`;
 }
 function makeTitle(text) { const words = text.trim().split(/\s+/).slice(0, 5).join(' '); return words.length < text.trim().length ? `${words}...` : words || 'New conversation'; }
-function loadSessions() { try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'); } catch { return []; } }
+function loadSessions(storageKey) {
+  try {
+    const saved = localStorage.getItem(storageKey);
+    if (saved) return JSON.parse(saved);
+    // One-time adoption of chats saved before accounts existed, so they aren't lost on first login.
+    const legacy = localStorage.getItem(STORAGE_KEY);
+    if (legacy) { localStorage.setItem(storageKey, legacy); localStorage.removeItem(STORAGE_KEY); return JSON.parse(legacy); }
+    return [];
+  } catch { return []; }
+}
 function resizeTextarea(textarea) { textarea.style.height = 'auto'; textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`; textarea.style.overflowY = textarea.scrollHeight > 200 ? 'auto' : 'hidden'; }
 
 export default App;

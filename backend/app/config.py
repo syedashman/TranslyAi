@@ -11,6 +11,9 @@ class Settings(BaseSettings):
     frontend_origin: str = "http://localhost:5173"
     backend_port: int = 8000
     gemini_api_key: str = ""
+    gemini_api_key_2: str = ""
+    gemini_api_key_3: str = ""
+    gemini_api_keys: str = ""
     hf_api_key: str = ""
     groq_api_key: str = ""
     supabase_url: str = ""
@@ -22,6 +25,21 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    def gemini_key_list(self) -> list[str]:
+        """All configured Gemini keys in priority order, de-duplicated and blank-free."""
+        candidates = [
+            self.gemini_api_key,
+            self.gemini_api_key_2,
+            self.gemini_api_key_3,
+            *self.gemini_api_keys.split(","),
+        ]
+        keys: list[str] = []
+        for candidate in candidates:
+            key = candidate.strip()
+            if key and key not in keys:
+                keys.append(key)
+        return keys
 
 
 @lru_cache

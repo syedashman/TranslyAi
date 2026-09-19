@@ -39,3 +39,34 @@ button, textarea, select { font: inherit; } button { cursor: pointer; }
 .composer-controls { align-items: flex-end; }
 @keyframes pulse { 0%, 100% { opacity: .35; transform: translateY(0); } 50% { opacity: 1; transform: translateY(-2px); } } @keyframes spin { to { transform: rotate(360deg); } }
 @media (max-width: 720px) { .sidebar { position: fixed; z-index: 10; top: 0; bottom: 0; left: -270px; transition: left .25s ease; box-shadow: 8px 0 30px rgba(0,0,0,.3); }.sidebar-open { left: 0; }.sidebar-close, .mobile-menu { display: grid; }.topbar { padding: 10px 14px; }.mobile-title { display: flex; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.conversation { padding: 28px 14px 160px; }.composer-wrap { left: 0; padding: 16px 10px 12px; }.user-bubble { max-width: 88%; }.assistant-content { max-width: calc(100% - 42px); }.empty-state { min-height: 58vh; }.empty-state h1 { font-size: 22px; }.prompt-suggestions { max-width: 310px; } }
+
+/* Auth pages */
+.auth-shell { display: grid; min-height: 100vh; padding: 20px 16px; place-items: center; color: #ececf1; background: #212121; }
+.auth-card { width: min(100%, 400px); padding: 30px 28px; border: 1px solid #383838; border-radius: 16px; background: #262626; box-shadow: 0 20px 60px rgba(0, 0, 0, .35); }
+.auth-brand { display: flex; align-items: center; gap: 9px; margin-bottom: 22px; font-size: 15px; font-weight: 700; }
+.auth-card h1 { margin: 0 0 6px; font-size: 22px; font-weight: 600; }
+.auth-subtitle { margin: 0 0 20px; color: #9a9a9a; font-size: 13px; line-height: 1.5; }
+.google-button { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; padding: 11px 14px; border: 1px solid #dadce0; border-radius: 9px; color: #1f1f1f; background: #fff; font: inherit; font-size: 14px; font-weight: 500; cursor: pointer; transition: .2s ease; }
+.google-button:hover:not(:disabled) { background: #f1f1f1; }
+.google-button:disabled, .auth-submit:disabled { opacity: .55; cursor: not-allowed; }
+.auth-divider { display: flex; align-items: center; gap: 12px; margin: 18px 0; color: #777; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+.auth-divider::before, .auth-divider::after { flex: 1; height: 1px; background: #383838; content: ''; }
+.auth-form { display: grid; gap: 14px; }
+.auth-form label { display: grid; gap: 6px; color: #b8b8b8; font-size: 12px; font-weight: 500; }
+.auth-form input { width: 100%; box-sizing: border-box; padding: 11px 12px; border: 1px solid #3d3d3d; border-radius: 9px; outline: none; color: #f2f2f2; background: #1d1d1d; font: inherit; font-size: 14px; transition: .2s ease; }
+.auth-form input:focus { border-color: #f97316; box-shadow: 0 0 0 3px rgba(249, 115, 22, .18); }
+.auth-submit { display: flex; align-items: center; justify-content: center; min-height: 42px; margin-top: 2px; border: 0; border-radius: 9px; color: #fff; background: #f97316; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; transition: .2s ease; }
+.auth-submit:hover:not(:disabled) { background: #fb8a3c; }
+.auth-message { padding: 10px 12px; border-radius: 8px; font-size: 12.5px; line-height: 1.5; }
+.auth-error { color: #f0a3a3; background: #3a1f1f; border: 1px solid #5a2b2b; }
+.auth-notice { color: #f3e3c2; background: #2b1d0f; border: 1px solid #6b4313; }
+.auth-switch { margin: 18px 0 0; color: #9a9a9a; font-size: 13px; text-align: center; }
+.auth-switch button { padding: 0; border: 0; color: #fbbf24; background: transparent; font: inherit; font-weight: 600; cursor: pointer; }
+.auth-switch button:hover { text-decoration: underline; }
+.account-row { display: flex; align-items: center; gap: 10px; margin: 8px 6px 0; padding: 10px; border: 1px solid #333; border-radius: 10px; background: #242424; }
+.account-avatar { display: grid; flex: none; width: 32px; height: 32px; overflow: hidden; place-items: center; border-radius: 50%; color: #fff; background: #f97316; font-size: 13px; font-weight: 700; }
+.account-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.account-info { display: grid; min-width: 0; flex: 1; gap: 1px; }
+.account-info strong { overflow: hidden; color: #ececec; font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.account-info span { overflow: hidden; color: #808080; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.auth-card > .auth-message { margin-bottom: 14px; }
