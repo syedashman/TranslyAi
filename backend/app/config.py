@@ -10,8 +10,6 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     hf_api_key: str = ""
     groq_api_key: str = ""
-    whisper_model: str = "small"
-    nllb_model: str = "facebook/nllb-200-distilled-600M"
     supabase_url: str = ""
     supabase_anon_key: str = ""
     supabase_service_role_key: str = ""
