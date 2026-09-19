@@ -3,6 +3,7 @@ import re
 import warnings
 from typing import Optional
 
+from google import genai
 import torch
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
@@ -16,59 +17,42 @@ class TranslationService:
     _tokenizer = None
     _model = None
     _generation_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="nllb-generation")
-    _claude_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="claude-translation")
+    _gemini_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="gemini-translation")
     _generation_timeout_seconds = 30
-    _claude_timeout_seconds = 60
+    _gemini_timeout_seconds = 60
 
     @staticmethod
-    def _extract_claude_text(response) -> str:
-        parts = []
-        for block in response.content or []:
-            if getattr(block, "type", None) == "text" or hasattr(block, "text"):
-                parts.append(getattr(block, "text", ""))
-        return "".join(parts).strip()
-
-    @staticmethod
-    def _create_claude_translation(client, model: str, system_prompt: str, text: str):
-        request_client = client
-        if hasattr(client, "with_options"):
-            request_client = client.with_options(timeout=60.0)
-        return request_client.messages.create(
-            model=model,
-            max_tokens=1000,
-            system=system_prompt,
-            messages=[{"role": "user", "content": text}],
+    def _create_gemini_translation(client: genai.Client, text: str):
+        prompt = (
+            "Translate the following text into clear, natural English. "
+            "Output only the translation, without commentary.\n\n"
+            f"{text}"
+        )
+        return client.models.generate_content(
+            model="gemini-3.6-flash",
+            contents=prompt,
         )
 
     @classmethod
-    def _translate_with_claude(cls, text: str) -> Optional[str]:
+    def _translate_with_gemini(cls, text: str) -> Optional[str]:
         if not SummarizerService.initialize():
             return None
 
-        client = SummarizerService._client
-        active_model = "claude-fable-5-1"
-        system_prompt = (
-            "You are a professional translator. Translate the provided text from any source "
-            "language into clear, natural English. Output ONLY the translated English text. "
-            "Do NOT add commentary, intros, or disclaimers."
-        )
         try:
-            future = cls._claude_executor.submit(
-                cls._create_claude_translation,
-                client,
-                active_model,
-                system_prompt,
+            future = cls._gemini_executor.submit(
+                cls._create_gemini_translation,
+                SummarizerService._client,
                 text,
             )
             try:
-                response = future.result(timeout=cls._claude_timeout_seconds)
+                response = future.result(timeout=cls._gemini_timeout_seconds)
             except TimeoutError as exc:
                 future.cancel()
-                print(f"CLAUDE TRANSLATION TIMEOUT: {exc}")
+                print(f"GEMINI TRANSLATION TIMEOUT: {exc}")
                 return None
-            return cls._extract_claude_text(response)
+            return response.text.strip()
         except Exception as exc:
-            print(f"CLAUDE TRANSLATION ERROR: {exc}")
+            print(f"GEMINI TRANSLATION ERROR: {exc}")
             return None
 
     @classmethod
@@ -133,9 +117,9 @@ class TranslationService:
 
         source_lang = cls.normalize_source_language(source_language) or "eng_Latn"
         if source_lang != "eng_Latn":
-            claude_translation = cls._translate_with_claude(text)
-            if claude_translation is not None:
-                return claude_translation
+            gemini_translation = cls._translate_with_gemini(text)
+            if gemini_translation is not None:
+                return gemini_translation
 
         cls.initialize()
 

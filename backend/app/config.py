@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     app_name: str = "AI Translator"
     frontend_origin: str = "http://localhost:5173"
     backend_port: int = 8000
-    anthropic_api_key: str = ""
+    gemini_api_key: str = ""
     hf_api_key: str = ""
     whisper_model: str = "small"
     nllb_model: str = "facebook/nllb-200-distilled-600M"
