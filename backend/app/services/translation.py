@@ -3,7 +3,6 @@ import re
 import warnings
 from typing import Optional
 
-from google import genai
 import torch
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
@@ -21,36 +20,26 @@ class TranslationService:
     _generation_timeout_seconds = 30
     _gemini_timeout_seconds = 60
 
-    @staticmethod
-    def _create_gemini_translation(client: genai.Client, text: str):
-        prompt = (
-            "Translate the following text into clear, natural English. "
-            "Output only the translation, without commentary.\n\n"
-            f"{text}"
-        )
-        return client.models.generate_content(
-            model="gemini-3.6-flash",
-            contents=prompt,
-        )
-
     @classmethod
     def _translate_with_gemini(cls, text: str) -> Optional[str]:
         if not SummarizerService.initialize():
             return None
 
+        prompt = (
+            "Translate the following text into clear, natural English. "
+            "Output only the translation, without commentary.\n\n"
+            f"{text}"
+        )
+
         try:
-            future = cls._gemini_executor.submit(
-                cls._create_gemini_translation,
-                SummarizerService._client,
-                text,
-            )
+            future = cls._gemini_executor.submit(SummarizerService.generate_with_retry, prompt)
             try:
-                response = future.result(timeout=cls._gemini_timeout_seconds)
+                translation = future.result(timeout=cls._gemini_timeout_seconds)
             except TimeoutError as exc:
                 future.cancel()
                 print(f"GEMINI TRANSLATION TIMEOUT: {exc}")
                 return None
-            return response.text.strip()
+            return translation.strip()
         except Exception as exc:
             print(f"GEMINI TRANSLATION ERROR: {exc}")
             return None
