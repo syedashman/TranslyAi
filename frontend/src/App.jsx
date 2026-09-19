@@ -7,6 +7,8 @@ import {
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://virtual-ai-translator.onrender.com';
 const STORAGE_KEY = 'aura-translate-sessions';
+const AUDIO_TIMEOUT_MS = 60000;
+const TIMEOUT_MESSAGE = 'Connection timed out. Please try again';
 const languages = [
   ['auto', 'Auto-detect'], ['es', 'Spanish'], ['fr', 'French'], ['de', 'German'], ['it', 'Italian'],
   ['pt', 'Portuguese'], ['ja', 'Japanese'], ['ko', 'Korean'], ['zh', 'Chinese'], ['ar', 'Arabic'],
@@ -101,7 +103,7 @@ function App() {
       setText('');
     } catch (err) {
       console.error('API Call Failed Details:', err);
-      setError(`Translation failed: ${err.message}`);
+      setError(isNetworkOrTimeoutError(err) ? TIMEOUT_MESSAGE : `Translation failed: ${err.message}`);
     }
     finally { setIsLoading(false); }
   };
@@ -113,11 +115,11 @@ function App() {
     const formData = new FormData(); formData.append('file', file);
     if (sourceLanguage !== 'auto') formData.append('source_language', sourceLanguage);
     try {
-      const response = await axios.post(`${API_BASE_URL}/api/audio`, formData, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 20000 });
+      const response = await axios.post(`${API_BASE_URL}/api/audio`, formData, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: AUDIO_TIMEOUT_MS });
       const transcript = (response.data.original_text || '').trim();
       appendConversation({ id: crypto.randomUUID(), role: 'user', content: hasNonLatinScript(transcript) ? '' : transcript, audioName: file.name, createdAt: Date.now() }, response.data, sessionId);
       setAudioFile(null);
-    } catch (requestError) { setError(requestError.response?.data?.detail || 'Audio processing failed.'); }
+    } catch (requestError) { setError(isNetworkOrTimeoutError(requestError) ? TIMEOUT_MESSAGE : requestError.response?.data?.detail || 'Audio processing failed.'); }
     finally { setIsLoading(false); }
   };
 
@@ -162,6 +164,10 @@ function EmptyState({ onPrompt }) {
   return <div className="empty-state"><div className="empty-icon"><Languages size={24} /></div><h1>Where should we start?</h1><p>Translate text or voice into clear English, then get a concise Claude summary.</p><div className="prompt-suggestions">{['Translate a meeting note', 'Summarize my voice memo', 'Help me understand this'].map((prompt) => <button key={prompt} type="button" onClick={() => onPrompt(prompt)}>{prompt}<ArrowUp size={14} /></button>)}</div></div>;
 }
 
+function isNetworkOrTimeoutError(err) {
+  if (err instanceof TypeError) return true; // fetch rejects with TypeError on network failure
+  return ['ECONNABORTED', 'ETIMEDOUT', 'ERR_NETWORK'].includes(err?.code) || Boolean(err?.request && !err?.response);
+}
 function hasNonLatinScript(text) { return /[^\p{Script=Latin}\p{Script=Common}\p{Script=Inherited}]/u.test(text); }
 function shortenFileName(name, max = 22) {
   if (name.length <= max) return name;

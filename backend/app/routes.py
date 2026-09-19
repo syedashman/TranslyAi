@@ -81,6 +81,9 @@ async def transcribe_audio(
         print(f"AUDIO ENDPOINT ERROR: {exc}")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     finally:
-        SpeechService.discard(audio_path)
-        await file.close()
+        try:
+            SpeechService.discard(audio_path)
+            await file.close()
+        except Exception as cleanup_error:
+            print(f"AUDIO ENDPOINT CLEANUP ERROR: {cleanup_error}")
         gc.collect()

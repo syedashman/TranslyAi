@@ -14,6 +14,10 @@ class SummarizerService:
     _primary_model = "gemini-3.6-flash"
     _fallback_model = "gemini-3.5-flash"
     _max_retries = 3
+    _generation_config = types.GenerateContentConfig(
+        tools=[],
+        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+    )
 
     @classmethod
     def initialize(cls) -> bool:
@@ -66,6 +70,7 @@ class SummarizerService:
                 response = cls._client.models.generate_content(
                     model=cls._primary_model,
                     contents=prompt,
+                    config=cls._generation_config,
                 )
                 return response.text.strip()
             except Exception as error:
@@ -82,6 +87,7 @@ class SummarizerService:
             response = cls._client.models.generate_content(
                 model=cls._fallback_model,
                 contents=prompt,
+                config=cls._generation_config,
             )
             return response.text.strip()
         except Exception as error:
