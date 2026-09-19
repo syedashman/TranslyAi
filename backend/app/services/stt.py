@@ -1,8 +1,11 @@
 import os
 
+from dotenv import find_dotenv, load_dotenv
 from groq import Groq
 
 from app.config import settings
+
+load_dotenv(find_dotenv(), override=True)
 
 
 class STTService:
@@ -22,6 +25,10 @@ class STTService:
                 transcription = client.audio.transcriptions.create(
                     file=(os.path.basename(file_path), file.read()),
                     model="whisper-large-v3-turbo",
+                    prompt=(
+                        "Transcribe the audio in English or Roman Urdu script only. "
+                        "Do NOT output Devanagari or Hindi characters."
+                    ),
                     response_format="text",
                 )
             return str(transcription)

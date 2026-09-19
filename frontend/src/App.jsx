@@ -24,7 +24,7 @@ function App() {
   const [isRecording, setIsRecording] = useState(false);
   const [health, setHealth] = useState('checking');
   const [error, setError] = useState('');
-  const [audioFile, setAudioFile] = useState('');
+  const [audioFile, setAudioFile] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
@@ -56,13 +56,13 @@ function App() {
   const createNewChat = () => {
     const session = makeSession();
     setSessions((current) => [session, ...current]); setActiveId(session.id);
-    setText(''); setAudioFile(''); setError(''); setSidebarOpen(false);
+    setText(''); setAudioFile(null); setError(''); setSidebarOpen(false);
   };
 
   const deleteSession = (sessionId) => {
     const remaining = sessions.filter((session) => session.id !== sessionId);
     setSessions(remaining);
-    if (sessionId === activeId) { setActiveId(remaining[0]?.id || null); setText(''); setAudioFile(''); setError(''); }
+    if (sessionId === activeId) { setActiveId(remaining[0]?.id || null); setText(''); setAudioFile(null); setError(''); }
   };
 
   const ensureActiveSession = () => {
@@ -75,13 +75,14 @@ function App() {
   const appendConversation = (userMessage, result, sessionId = activeId) => {
     setSessions((current) => current.map((session) => {
       if (session.id !== sessionId) return session;
-      const title = session.messages.length === 0 ? makeTitle(userMessage.content) : session.title;
+      const title = session.messages.length === 0 ? makeTitle(userMessage.content || userMessage.audioName || '') : session.title;
       return { ...session, title, messages: [...session.messages, userMessage, { id: crypto.randomUUID(), role: 'assistant', result, createdAt: Date.now() }] };
     }));
   };
 
   const submitText = async (event) => {
     event?.preventDefault();
+    if (audioFile) { submitAudio(audioFile); return; }
     if (!text.trim()) { setError('Write a message or attach an audio clip to begin.'); return; }
     const sessionId = ensureActiveSession();
     const input = text.trim();
@@ -97,7 +98,7 @@ function App() {
       if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
       const data = await response.json();
       appendConversation({ id: crypto.randomUUID(), role: 'user', content: input, createdAt: Date.now() }, data, sessionId);
-      setText(''); setAudioFile('');
+      setText('');
     } catch (err) {
       console.error('API Call Failed Details:', err);
       setError(`Translation failed: ${err.message}`);
@@ -108,13 +109,14 @@ function App() {
   const submitAudio = async (file) => {
     if (!file) return;
     const sessionId = ensureActiveSession();
-    setAudioFile(file.name); setIsLoading(true); setError('');
+    setIsLoading(true); setError('');
     const formData = new FormData(); formData.append('file', file);
     if (sourceLanguage !== 'auto') formData.append('source_language', sourceLanguage);
     try {
       const response = await axios.post(`${API_BASE_URL}/api/audio`, formData, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 20000 });
-      appendConversation({ id: crypto.randomUUID(), role: 'user', content: response.data.original_text || `Audio: ${file.name}`, createdAt: Date.now() }, response.data, sessionId);
-      setText(response.data.original_text || '');
+      const transcript = (response.data.original_text || '').trim();
+      appendConversation({ id: crypto.randomUUID(), role: 'user', content: hasNonLatinScript(transcript) ? '' : transcript, audioName: file.name, createdAt: Date.now() }, response.data, sessionId);
+      setAudioFile(null);
     } catch (requestError) { setError(requestError.response?.data?.detail || 'Audio processing failed.'); }
     finally { setIsLoading(false); }
   };
@@ -140,7 +142,7 @@ function App() {
           {activeSession?.messages.length ? activeSession.messages.map((message) => <Message key={message.id} message={message} />) : <EmptyState onPrompt={(prompt) => setText(prompt)} />}
           {isLoading && <div className="message-row assistant-row"><div className="avatar assistant-avatar"><Sparkles size={15} /></div><div className="typing"><span /><span /><span /></div></div>}
         </section>
-        <div className="composer-wrap"><form className="composer" onSubmit={submitText}>{audioFile && <div className="attachment-chip"><Paperclip size={13} />{audioFile}<button type="button" onClick={() => setAudioFile('')} aria-label="Remove attachment"><X size={13} /></button></div>}<textarea ref={textareaRef} value={text} onChange={(event) => { setText(event.target.value); resizeTextarea(event.target); }} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submitText(event); } }} rows={1} placeholder="Message Aura Translate..." aria-label="Message" /><div className="composer-controls"><div className="composer-tools"><input ref={fileInputRef} type="file" accept="audio/*" onChange={(event) => submitAudio(event.target.files?.[0])} hidden /><button type="button" className="tool-button" onClick={() => fileInputRef.current?.click()} aria-label="Attach audio"><Paperclip size={18} /></button><button type="button" className={`tool-button ${isRecording ? 'recording' : ''}`} onClick={handleRecording} aria-label={isRecording ? 'Stop recording' : 'Record audio'}>{isRecording ? <CircleStop size={18} /> : <Mic size={18} />}</button><label className="language-select"><Languages size={14} /><select value={sourceLanguage} onChange={(event) => setSourceLanguage(event.target.value)} aria-label="Source language">{languages.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><ChevronDown size={13} /></label></div><button type="submit" className="send-button" disabled={isLoading || !text.trim()} aria-label="Send message">{isLoading ? <LoaderCircle size={18} className="spin" /> : <ArrowUp size={18} />}</button></div></form>{error && <div className="error-line"><X size={14} />{error}</div>}<p className="composer-note">Aura can make mistakes. Check important translations.</p></div>
+        <div className="composer-wrap"><form className="composer" onSubmit={submitText}>{audioFile && <div className="attachment-chip"><Paperclip size={13} />{shortenFileName(audioFile.name)}<button type="button" onClick={() => setAudioFile(null)} aria-label="Remove attachment"><X size={13} /></button></div>}<textarea ref={textareaRef} value={text} onChange={(event) => { setText(event.target.value); resizeTextarea(event.target); }} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submitText(event); } }} rows={1} placeholder="Message Aura Translate..." aria-label="Message" /><div className="composer-controls"><div className="composer-tools"><input ref={fileInputRef} type="file" accept="audio/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) { setAudioFile(file); setError(''); } event.target.value = ''; }} hidden /><button type="button" className="tool-button" onClick={() => fileInputRef.current?.click()} aria-label="Attach audio"><Paperclip size={18} /></button><button type="button" className={`tool-button ${isRecording ? 'recording' : ''}`} onClick={handleRecording} aria-label={isRecording ? 'Stop recording' : 'Record audio'}>{isRecording ? <CircleStop size={18} /> : <Mic size={18} />}</button><label className="language-select"><Languages size={14} /><select value={sourceLanguage} onChange={(event) => setSourceLanguage(event.target.value)} aria-label="Source language">{languages.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><ChevronDown size={13} /></label></div><button type="submit" className="send-button" disabled={isLoading || (!text.trim() && !audioFile)} aria-label="Send message">{isLoading ? <LoaderCircle size={18} className="spin" /> : <ArrowUp size={18} />}</button></div></form>{error && <div className="error-line"><X size={14} />{error}</div>}<p className="composer-note">Aura can make mistakes. Check important translations.</p></div>
       </main>
     </div>
   );
@@ -151,7 +153,7 @@ function Sidebar({ sessions, activeId, health, isOpen, onNew, onSelect, onDelete
 }
 
 function Message({ message }) {
-  if (message.role === 'user') return <div className="message-row user-row"><div className="user-bubble">{message.content}</div></div>;
+  if (message.role === 'user') return <div className="message-row user-row"><div className="user-bubble">{message.audioName && <span className="audio-badge"><Paperclip size={13} />{shortenFileName(message.audioName)}</span>}{message.content}</div></div>;
   const { result } = message;
   return <div className="message-row assistant-row"><div className="avatar assistant-avatar"><Sparkles size={15} /></div><div className="assistant-content"><div className="assistant-label">Aura Translate <span>· just now</span></div><div className="translation-card"><div className="result-heading"><span>English translation</span><button type="button" className="mini-action" aria-label="Copy translation" onClick={() => navigator.clipboard?.writeText(result.english_translation)}><Copy size={14} /></button></div><p>{result.english_translation}</p></div><div className="summary-card"><div className="summary-heading"><Sparkles size={14} />Claude summary</div><p>{result.summary}</p></div><div className="message-actions"><button type="button" aria-label="Read translation aloud"><Volume2 size={14} /></button><button type="button" aria-label="Copy response" onClick={() => navigator.clipboard?.writeText(`${result.english_translation}\n\n${result.summary}`)}><Copy size={14} /></button></div></div></div>;
 }
@@ -160,6 +162,13 @@ function EmptyState({ onPrompt }) {
   return <div className="empty-state"><div className="empty-icon"><Languages size={24} /></div><h1>Where should we start?</h1><p>Translate text or voice into clear English, then get a concise Claude summary.</p><div className="prompt-suggestions">{['Translate a meeting note', 'Summarize my voice memo', 'Help me understand this'].map((prompt) => <button key={prompt} type="button" onClick={() => onPrompt(prompt)}>{prompt}<ArrowUp size={14} /></button>)}</div></div>;
 }
 
+function hasNonLatinScript(text) { return /[^\p{Script=Latin}\p{Script=Common}\p{Script=Inherited}]/u.test(text); }
+function shortenFileName(name, max = 22) {
+  if (name.length <= max) return name;
+  const dot = name.lastIndexOf('.');
+  const ext = dot > 0 ? name.slice(dot + 1) : '';
+  return `${name.slice(0, max - ext.length - 3).trimEnd()}...${ext}`;
+}
 function makeTitle(text) { const words = text.trim().split(/\s+/).slice(0, 5).join(' '); return words.length < text.trim().length ? `${words}...` : words || 'New conversation'; }
 function loadSessions() { try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'); } catch { return []; } }
 function resizeTextarea(textarea) { textarea.style.height = 'auto'; textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`; textarea.style.overflowY = textarea.scrollHeight > 200 ? 'auto' : 'hidden'; }
