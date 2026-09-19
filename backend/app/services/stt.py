@@ -1,4 +1,5 @@
 import os
+from typing import Optional
 
 from dotenv import find_dotenv, load_dotenv
 from groq import Groq
@@ -9,8 +10,13 @@ load_dotenv(find_dotenv(), override=True)
 
 
 class STTService:
+    _client: Optional[Groq] = None
+
     @classmethod
-    async def transcribe(cls, file_path: str) -> str:
+    def _get_client(cls) -> Groq:
+        if cls._client is not None:
+            return cls._client
+
         if not os.getenv("GROQ_API_KEY") and settings.groq_api_key.strip():
             os.environ["GROQ_API_KEY"] = settings.groq_api_key
 
@@ -18,12 +24,18 @@ class STTService:
         if not groq_api_key:
             raise Exception("GROQ_API_KEY environment variable is missing")
 
-        client = Groq(api_key=groq_api_key)
+        cls._client = Groq(api_key=groq_api_key)
+        return cls._client
+
+    @classmethod
+    async def transcribe(cls, file_path: str) -> str:
+        client = cls._get_client()
 
         try:
+            # Pass the open handle (not bytes/path) so the SDK streams it instead of loading it into RAM.
             with open(file_path, "rb") as file:
                 transcription = client.audio.transcriptions.create(
-                    file=(os.path.basename(file_path), file.read()),
+                    file=(os.path.basename(file_path), file),
                     model="whisper-large-v3-turbo",
                     prompt=(
                         "Transcribe the audio in English or Roman Urdu script only. "

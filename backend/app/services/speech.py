@@ -2,24 +2,47 @@ import os
 import tempfile
 from typing import Optional
 
+from fastapi import UploadFile
+
 from app.services.stt import STTService
+
+UPLOAD_CHUNK_BYTES = 1024 * 1024
+MAX_AUDIO_BYTES = 25 * 1024 * 1024
 
 
 class SpeechService:
-    @classmethod
-    async def transcribe_file(cls, audio_bytes: bytes, filename: str, language: Optional[str] = None) -> str:
-        if not audio_bytes:
-            raise ValueError("Audio file is empty.")
-
-        suffix = os.path.splitext(filename)[1] or ".wav"
+    @staticmethod
+    async def save_upload(upload: UploadFile) -> str:
+        """Stream an upload to a temp file in chunks so the audio is never fully held in RAM."""
+        suffix = os.path.splitext(upload.filename or "")[1] or ".wav"
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temp_file:
-            temp_file.write(audio_bytes)
             temp_path = temp_file.name
-
-        try:
-            return await STTService.transcribe(temp_path)
-        finally:
+            total = 0
             try:
-                os.unlink(temp_path)
-            except FileNotFoundError:
-                pass
+                while chunk := await upload.read(UPLOAD_CHUNK_BYTES):
+                    total += len(chunk)
+                    if total > MAX_AUDIO_BYTES:
+                        raise ValueError("Audio file is too large (25 MB maximum).")
+                    temp_file.write(chunk)
+            except Exception:
+                temp_file.close()
+                SpeechService.discard(temp_path)
+                raise
+
+        if total == 0:
+            SpeechService.discard(temp_path)
+            raise ValueError("Audio file is empty.")
+        return temp_path
+
+    @staticmethod
+    def discard(path: Optional[str]) -> None:
+        if not path:
+            return
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+
+    @classmethod
+    async def transcribe_file(cls, audio_path: str) -> str:
+        return await STTService.transcribe(audio_path)

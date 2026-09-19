@@ -2,6 +2,12 @@ from typing import Optional
 
 from lingua import Language, LanguageDetectorBuilder
 
+SUPPORTED_LANGUAGES = (
+    Language.ENGLISH, Language.SPANISH, Language.FRENCH, Language.GERMAN,
+    Language.ITALIAN, Language.PORTUGUESE, Language.JAPANESE, Language.KOREAN,
+    Language.CHINESE, Language.ARABIC, Language.URDU,
+)
+
 
 class LanguageService:
     _detector = None
@@ -12,11 +18,7 @@ class LanguageService:
             return
 
         try:
-            cls._detector = (
-                LanguageDetectorBuilder.from_all_languages()
-                .with_preloaded_language_models()
-                .build()
-            )
+            cls._detector = LanguageDetectorBuilder.from_languages(*SUPPORTED_LANGUAGES).build()
         except Exception as exc:
             raise RuntimeError(f"Failed to initialize language detector: {exc}") from exc
 

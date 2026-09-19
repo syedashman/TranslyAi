@@ -1,9 +1,11 @@
 import asyncio
+import gc
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from app.schemas import TranslationRequest, TranslationResponse
 from app.services.language import LanguageService
+from app.services.speech import SpeechService
 from app.services.summarizer import SummarizerService
 from app.services.translation import TranslationService
 from app.services.translator import translate_and_summarize
@@ -55,16 +57,17 @@ async def transcribe_audio(
     file: UploadFile = File(...),
     source_language: str | None = Form(default=None),
 ):
+    gc.collect()
+    audio_path = None
     try:
         if not file.filename:
             raise ValueError("No audio file uploaded.")
 
-        content = await file.read()
+        audio_path = await SpeechService.save_upload(file)
         result = await translate_and_summarize(
             text="",
             source_language=source_language,
-            audio_bytes=content,
-            filename=file.filename,
+            audio_path=audio_path,
         )
         return result
     except ValueError as exc:
@@ -76,3 +79,7 @@ async def transcribe_audio(
     except Exception as exc:
         print(f"AUDIO ENDPOINT ERROR: {exc}")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        SpeechService.discard(audio_path)
+        await file.close()
+        gc.collect()
