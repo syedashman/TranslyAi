@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Optional
 
 from app.services.language import LanguageService
@@ -26,8 +27,13 @@ async def translate_and_summarize(
     if detected_language is None:
         raise ValueError("Unable to detect the input language automatically.")
 
-    english_translation = TranslationService.translate_to_english(text, detected_language)
-    summary = SummarizerService.summarize(english_translation)
+    english_translation, translated = await asyncio.to_thread(
+        TranslationService.translate_with_status, text
+    )
+    if translated:
+        summary = await asyncio.to_thread(SummarizerService.summarize, english_translation)
+    else:
+        summary = SummarizerService._fallback_message
 
     return {
         "detected_language": LanguageService.display_name(detected_language),

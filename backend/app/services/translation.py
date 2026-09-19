@@ -7,6 +7,7 @@ from app.services.summarizer import SummarizerService
 class TranslationService:
     _gemini_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="gemini-translation")
     _gemini_timeout_seconds = 60
+    _fallback_message = "Translation is temporarily unavailable. Please try again later."
 
     @classmethod
     def _translate_with_gemini(cls, text: str) -> Optional[str]:
@@ -39,12 +40,13 @@ class TranslationService:
             return None
 
     @classmethod
-    def translate_to_english(cls, text: str, source_language: Optional[str] = None) -> str:
+    def translate_with_status(cls, text: str) -> tuple[str, bool]:
+        """Return (english_text, translated). Never raises when Gemini is unavailable."""
         if not text or not text.strip():
             raise ValueError("Text is empty; cannot translate.")
 
         translation = cls._translate_with_gemini(text)
         if translation:
-            return translation
+            return translation, True
 
-        raise RuntimeError("Translation is temporarily unavailable. Please try again later.")
+        return cls._fallback_message, False

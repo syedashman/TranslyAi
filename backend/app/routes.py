@@ -24,24 +24,25 @@ async def translate_endpoint(request: TranslationRequest):
                 timeout=15.0,
             )
 
-        translated_text = await asyncio.wait_for(
-            asyncio.to_thread(
-                TranslationService.translate_to_english,
-                request.text,
-                detected_language,
-            ),
-            timeout=15.0,
-        )
-    except Exception:
-        translated_text = request.text.strip()
-
-    try:
-        summary = await asyncio.wait_for(
-            asyncio.to_thread(SummarizerService.summarize, translated_text),
+        translated_text, translated = await asyncio.wait_for(
+            asyncio.to_thread(TranslationService.translate_with_status, request.text),
             timeout=15.0,
         )
     except Exception as exc:
-        summary = f"Summary unavailable: {exc}"
+        print(f"TRANSLATE ENDPOINT ERROR: {exc}")
+        translated_text, translated = TranslationService._fallback_message, False
+
+    if not translated:
+        summary = SummarizerService._fallback_message
+    else:
+        try:
+            summary = await asyncio.wait_for(
+                asyncio.to_thread(SummarizerService.summarize, translated_text),
+                timeout=15.0,
+            )
+        except Exception as exc:
+            print(f"SUMMARY ENDPOINT ERROR: {exc}")
+            summary = SummarizerService._fallback_message
 
     fallback_language = LanguageService.normalize_code(source_language) or "en"
     return {

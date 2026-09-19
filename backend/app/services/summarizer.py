@@ -12,7 +12,7 @@ class SummarizerService:
     _client: Optional[genai.Client] = None
     _fallback_message = "Summary is unavailable right now. Please try again later."
     _primary_model = "gemini-3.6-flash"
-    _fallback_model = "gemini-1.5-flash"
+    _fallback_model = "gemini-3.5-flash"
     _max_retries = 3
 
     @classmethod
