@@ -19,7 +19,6 @@ from app.schemas import (
 )
 from app.services.chat_store import ChatStore, ChatStoreError
 from app.services.language import LanguageService
-from app.services.romanizer import to_roman_script
 from app.services.speech import SpeechService
 from app.services.summarizer import SummarizerService
 from app.services.titler import TitleService
@@ -82,14 +81,9 @@ async def transcribe_only(
             raise ValueError("No audio file uploaded.")
 
         audio_path = await SpeechService.save_upload(file)
-        text = await SpeechService.transcribe_file(audio_path, language=LanguageService.normalize_code(source_language))
-        text = text.strip()
-        try:
-            # Whisper sometimes answers in Devanagari or Urdu script; the preview must be Roman Urdu / English.
-            text = (await asyncio.wait_for(asyncio.to_thread(to_roman_script, text), timeout=45.0)).strip()
-        except Exception as exc:
-            print(f"TRANSCRIBE ROMANIZE ERROR: {exc}")
-        return {"text": text}
+        # roman=True: Whisper may answer in Urdu/Devanagari script, but the preview must be Roman Urdu / English.
+        text = await SpeechService.transcribe_file(audio_path, language=LanguageService.normalize_code(source_language), roman=True)
+        return {"text": text.strip()}
     except ValueError as exc:
         print(f"TRANSCRIBE ENDPOINT VALUE ERROR: {exc}")
         raise HTTPException(status_code=400, detail=str(exc)) from exc
