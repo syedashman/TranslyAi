@@ -85,7 +85,7 @@ function ChatItem({ chat, active, withIcon, menuOpen, onSelect, onOpenMenu }) {
 }
 
 export default function ChatSidebar({
-  chats, loading, error, onRetry, activeId, health, isOpen, user, guest = false, onRequestAuth = () => {},
+  chats, loading, error, onRetry, activeId, isOpen, user, guest = false, onRequestAuth = () => {},
   onSignOut, onProfileChange, onNew, onSelect, onClose, onTogglePin, onToggleArchive, onDelete,
 }) {
   const [query, setQuery] = useState('');
@@ -172,10 +172,6 @@ export default function ChatSidebar({
           <div><button type="button" className={`${CTA_LOGIN} flex-1`} onClick={() => onRequestAuth('login')}>Log in</button><button type="button" className={`${CTA_SIGNUP} flex-1`} onClick={() => onRequestAuth('signup')}>Sign up</button></div>
         </div>
       ) : <AccountMenu user={user} onSignOut={onSignOut} onProfileChange={onProfileChange} />}
-      <div className="sidebar-footer">
-        <div className={`status-dot ${health}`} />
-        <span>{health === 'connected' ? 'Backend connected' : health === 'checking' ? 'Checking connection' : 'Backend offline'}</span>
-      </div>
     </aside>
   );
 }

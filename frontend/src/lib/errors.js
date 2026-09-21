@@ -1,13 +1,14 @@
 // Turns any failure (axios, fetch, backend detail text) into one short message a user can act on.
 export const MESSAGES = {
-  network: 'Unable to reach the server. Please check your internet connection and try again.',
-  timeout: 'The server is taking too long to respond. Please check your connection and try again.',
+  network: 'Connection failed: Unable to reach TranslyAi server. Please check your internet or try again later.',
+  timeout: 'Request timed out: TranslyAi server is taking too long to respond. Please check your connection and try again.',
   session: 'Your session has expired. Please log in again.',
   busy: 'TranslyAi is very busy right now (AI usage limit reached). Please wait a minute and try again.',
   database: 'Unable to connect to database. Please check your connection.',
   databaseSetup: 'The chat database is not set up correctly yet. Please contact the site administrator.',
   transcription: "We couldn't transcribe that audio. Please try again or record a clearer clip.",
-  server: 'Something went wrong on our side. Please try again in a moment.',
+  server: 'Server error: Something went wrong on TranslyAi\'s side. Please try again in a moment.',
+  unavailable: 'Server unavailable: TranslyAi server is temporarily down or restarting. Please try again in a minute.',
   generic: 'Something went wrong. Please try again.',
 };
 
@@ -38,7 +39,8 @@ export function describeError(error, fallback = MESSAGES.generic) {
   if (DB_SETUP.test(message) && /chat|table|supabase|column/i.test(message)) return MESSAGES.databaseSetup;
   if (DB.test(message) || (status === 503 && /chat|storage/i.test(message))) return MESSAGES.database;
   if (status === 504 || status === 408) return MESSAGES.timeout;
-  if (status >= 500) return STT.test(message) ? MESSAGES.transcription : MESSAGES.server;
+  if (status === 502 || status === 503) return `${MESSAGES.unavailable} (HTTP ${status})`;
+  if (status >= 500) return STT.test(message) ? MESSAGES.transcription : `${MESSAGES.server} (HTTP ${status})`;
   if (status === 413) return 'That file is too large. Please use a smaller audio clip (25 MB maximum).';
   if (status === 422) return 'That request was not valid. Please check your input and try again.';
   return detail && detail.length <= 160 ? detail : fallback;

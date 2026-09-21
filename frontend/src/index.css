@@ -159,7 +159,7 @@ button, textarea, select { font: inherit; } button { cursor: pointer; }
 .composer textarea { max-height: 200px; overflow-y: hidden; }
 .composer-controls { align-items: flex-end; }
 @keyframes pulse { 0%, 100% { opacity: .35; transform: translateY(0); } 50% { opacity: 1; transform: translateY(-2px); } } @keyframes spin { to { transform: rotate(360deg); } }
-@media (max-width: 720px) { .sidebar { position: fixed; z-index: 10; top: 0; bottom: 0; left: -270px; transition: left .25s ease; box-shadow: 8px 0 30px rgba(0,0,0,.3); }.sidebar-open { left: 0; }.sidebar-close, .mobile-menu { display: grid; }.topbar { padding: 10px 14px; }.mobile-title { display: flex; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.conversation { padding: 28px 14px 160px; }.composer-wrap { left: 0; padding: 16px 10px 12px; }.user-bubble { max-width: 88%; }.assistant-content { max-width: calc(100% - 42px); }.empty-state { min-height: 58vh; }.empty-state h1 { font-size: 22px; }.prompt-suggestions { max-width: 310px; } }
+@media (max-width: 720px) { .sidebar { position: fixed; z-index: 40; top: 0; bottom: 0; left: -270px; transition: left .25s ease; box-shadow: 8px 0 30px rgba(0,0,0,.3); }.sidebar-open { left: 0; }.sidebar-close, .mobile-menu { display: grid; }.topbar { padding: 10px 14px; }.conversation { padding: 28px 14px 160px; }.composer-wrap { left: 0; padding: 16px 10px 12px; }.user-bubble { max-width: 88%; }.assistant-content { max-width: calc(100% - 42px); }.empty-state { min-height: 58vh; }.empty-state h1 { font-size: 22px; }.prompt-suggestions { max-width: 310px; } }
 
 /* Auth pages */
 .auth-shell { display: grid; min-height: 100vh; padding: 20px 16px; place-items: center; color: var(--cececf1); background: var(--c212121); }
@@ -381,8 +381,6 @@ button, textarea, select { font: inherit; } button { cursor: pointer; }
 .auth-overlay { position: fixed; z-index: 200; inset: 0; overflow-y: auto; background: var(--c212121); }
 @media (max-width: 720px) {
   .topbar { justify-content: flex-start; gap: 8px; }
-  .mobile-title { min-width: 0; max-width: min(180px, calc(100vw - 250px)); }
-  .mobile-title span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 }
 
 /* Sub-tagline under the welcome heading: text-gray-400 text-sm md:text-base mt-2 mb-6 max-w-lg text-center mx-auto */
@@ -461,14 +459,22 @@ button, textarea, select { font: inherit; } button { cursor: pointer; }
 .stop-button:focus-visible { outline: 2px solid #ffffff; outline-offset: 2px; }
 .stop-square { display: block; width: 11px; height: 11px; border-radius: 2px; background: #ffffff; }
 
-/* TranslyAi "T" logo: bold white letter in a dark rounded container */
-.brand-mark, .assistant-avatar, .auth-prompt-icon { color: #ffffff; border: 1px solid #38383f; background: linear-gradient(145deg, #2a2a30, #121214); box-shadow: 0 2px 12px rgba(0, 0, 0, .35); }
-.t-glyph { display: block; font-family: Manrope, 'DM Sans', sans-serif; font-size: 15px; font-weight: 800; line-height: 1; letter-spacing: 0; }
-.brand-mark .t-glyph { font-size: 16px; }
-.t-glyph.t-small { font-size: 13px; }
-.t-glyph.t-large { font-size: 24px; }
-.mobile-title .t-glyph { display: grid; width: 22px; height: 22px; place-items: center; border-radius: 7px; color: #ffffff; border: 1px solid #38383f; background: linear-gradient(145deg, #2a2a30, #121214); }
-
 /* Stop button follows the brand accent (orange) instead of blue */
 .stop-button { background: #f97316; box-shadow: 0 0 16px rgba(249, 115, 22, .38); }
 .stop-button:hover { background: #ea580c; }
+
+/* Mobile sidebar: the drawer sits above the header buttons, and a dimmed backdrop closes it when tapped.
+   Layers: header buttons z-20, backdrop z-30, sidebar drawer z-40. */
+.sidebar-backdrop { display: none; }
+@media (max-width: 720px) {
+  .sidebar-backdrop { position: fixed; z-index: 30; inset: 0; display: block; background: rgba(0, 0, 0, .5); animation: backdrop-in .2s ease-out; }
+}
+@keyframes backdrop-in { from { opacity: 0; } to { opacity: 1; } }
+
+/* Error toast: floats just above the input bar so it never shifts the layout */
+.composer-wrap { position: relative; }
+.error-toast { position: absolute; z-index: 5; bottom: calc(100% + 4px); left: 50%; width: min(calc(100% - 28px), 770px); margin: 0; padding: 12px 12px 12px 14px; align-items: center; gap: 11px; border: 1px solid rgba(239, 68, 68, .4); border-left: 3px solid #ef4444; border-radius: 12px; color: var(--text); background: var(--surface); box-shadow: 0 10px 30px rgba(0, 0, 0, .35); font-size: 13.5px; transform: translateX(-50%); animation: error-toast-in .2s ease-out; }
+.error-toast span { line-height: 1.45; }
+.error-toast .error-icon { flex: none; color: #ef4444; }
+@keyframes error-toast-in { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translate(-50%, 0); } }
+@media (prefers-reduced-motion: reduce) { .error-toast { animation: none; } }

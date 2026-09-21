@@ -5,7 +5,7 @@ import DeleteModal from './DeleteModal';
 import ShareModal from './ShareModal';
 import VoiceBar from './VoiceBar';
 import {
-  ArrowUp, Copy, LoaderCircle,
+  ArrowUp, CircleAlert, Copy, LoaderCircle,
   Menu, Mic, PanelLeftOpen, Paperclip, Pencil, Share, Sparkles, X,
 } from 'lucide-react';
 import { API_BASE_URL } from './lib/config';
@@ -22,7 +22,7 @@ const AUDIO_TIMEOUT_MS = 60000;
 const COLLAPSE_KEY = 'linguaai-sidebar-collapsed';
 const CHAT_PARAM = 'chatId';
 const CHAT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const ERROR_VISIBLE_MS = 9000;
+const ERROR_VISIBLE_MS = 12000;
 
 // The open chat lives in the address bar (?chatId=...) so a refresh or a shared link reopens it.
 function readChatIdFromUrl() {
@@ -80,7 +80,6 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [textFromSpeech, setTextFromSpeech] = useState(false); // the input holds dictated text
   const [focusTick, setFocusTick] = useState(0);
-  const [health, setHealth] = useState('checking');
   const [error, setError] = useState('');
   const [audioFile, setAudioFile] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -181,17 +180,22 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
     if (conversationRef.current) conversationRef.current.scrollTop = conversationRef.current.scrollHeight;
   }, [messages, messagesLoading, pending]);
 
+  // Nothing is shown for this: it only wakes the free-tier server so the first real request is not slow.
+  useEffect(() => { axios.get(`${API_BASE_URL}/health`, { timeout: 60000 }).catch(() => {}); }, []);
+
+  // Safety net: an API failure that no handler caught still reaches the user instead of failing silently.
   useEffect(() => {
-    let mounted = true;
-    if (isLoading) return () => { mounted = false; };
-    const checkHealth = async () => {
-      try { await axios.get(`${API_BASE_URL}/health`, { timeout: 4000 }); if (mounted) setHealth('connected'); }
-      catch { }
+    const isApiFailure = (reason) => Boolean(reason) && !axios.isCancel(reason) && (
+      reason.isAxiosError || reason.response || reason.request
+      || (reason instanceof TypeError && /fetch|network|load failed/i.test(reason.message)));
+    const onRejection = (event) => {
+      if (!isApiFailure(event.reason)) return;
+      event.preventDefault();
+      setError(describeError(event.reason));
     };
-    checkHealth();
-    const interval = window.setInterval(checkHealth, 30000);
-    return () => { mounted = false; window.clearInterval(interval); };
-  }, [isLoading]);
+    window.addEventListener('unhandledrejection', onRejection);
+    return () => window.removeEventListener('unhandledrejection', onRejection);
+  }, []);
 
   const loadMessages = async (chatId) => {
     setMessagesLoading(true); setMessagesError('');
@@ -527,16 +531,17 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
     <div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
       <ChatSidebar
         chats={chats} loading={chatsLoading} error={chatsError} onRetry={refreshChats}
-        activeId={activeId} health={health} isOpen={sidebarOpen} user={user} guest={guest} onRequestAuth={onRequestAuth}
+        activeId={activeId} isOpen={sidebarOpen} user={user} guest={guest} onRequestAuth={onRequestAuth}
         onSignOut={onSignOut} onProfileChange={onProfileChange}
         onNew={startNewChat} onSelect={selectChat} onClose={closeSidebar}
         onTogglePin={togglePin} onToggleArchive={toggleArchive} onDelete={setDeleteTarget}
       />
+      {/* Mobile only (hidden by CSS on larger screens): tapping the dimmed page closes the open sidebar. */}
+      {sidebarOpen && <div className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} aria-hidden="true" />}
       <main className="chat-layout">
         <header className="topbar">
           <button type="button" className="icon-button mobile-menu" onClick={() => setSidebarOpen(true)} aria-label="Open sidebar"><Menu size={19} /></button>
           <button type="button" className="icon-button expand-sidebar" onClick={() => updateCollapsed(false)} aria-label="Open sidebar"><PanelLeftOpen size={19} /></button>
-          <div className="mobile-title"><span className="t-glyph t-small">T</span><span>{activeChat?.title || 'New chat'}</span></div>
           {!guest && activeId && (
             <button type="button" className="topbar-share" onClick={() => setShareOpen(true)} aria-label="Share chat"><Share size={16} />Share</button>
           )}
@@ -589,7 +594,7 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
                 : <button key="send" type="submit" className="send-button" disabled={busy || limitReached || (!text.trim() && !audioFile)} aria-label="Send message">{isSaving ? <LoaderCircle size={18} className="spin" /> : <ArrowUp size={18} />}</button>}
             </div>
           </form>
-          {error && <div className="error-line" role="alert"><span>{error}</span><button type="button" onClick={() => setError('')} aria-label="Dismiss message"><X size={14} /></button></div>}
+          {error && <div className="error-line error-toast" role="alert"><CircleAlert size={18} className="error-icon" /><span>{error}</span><button type="button" onClick={() => setError('')} aria-label="Dismiss message"><X size={14} /></button></div>}
           <p className="composer-note">{guest && !limitReached ? `Guest mode: ${freeLeft} free ${freeLeft === 1 ? 'message' : 'messages'} left. ` : ''}TranslyAi can make mistakes. Check important translations.</p>
         </div>
       </main>
@@ -611,7 +616,7 @@ function AuthPrompt({ limitReached, onClose, onRequestAuth }) {
   return (
     <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <div className="modal auth-prompt" role="dialog" aria-modal="true" aria-labelledby="auth-prompt-title">
-        <div className="auth-prompt-icon"><span className="t-glyph t-large">T</span></div>
+        <div className="auth-prompt-icon"><Sparkles size={22} /></div>
         <h2 id="auth-prompt-title">{limitReached ? "You've used your free messages" : 'Sign up to keep going'}</h2>
         <p>Sign up or Log in to continue chatting with TranslyAi. It only takes a moment, and your chats will be saved.</p>
         <div className="auth-prompt-actions">
@@ -672,7 +677,7 @@ function Message({ message, editing, canEdit, onCopy, onStartEdit, onCancelEdit,
   }
   const { result } = message;
   if (!result) return null;
-  return <div className="message-row assistant-row"><div className="avatar assistant-avatar"><span className="t-glyph">T</span></div><div className="assistant-content"><div className="assistant-label">TranslyAi</div><div className="translation-card"><div className="result-heading"><span>English translation</span><button type="button" className="mini-action" aria-label="Copy translation" onClick={() => onCopy(result.english_translation, 'Translation copied')}><Copy size={14} /></button></div>{paragraphs(result.english_translation).map((paragraph, index) => <p key={index}>{paragraph}</p>)}</div><div className="summary-card"><div className="summary-heading"><Sparkles size={14} />TranslyAi summary</div><SummaryText text={result.summary} /></div><div className="message-actions">{/* Text-to-speech is hidden for now: <button type="button" aria-label="Read translation aloud"><Volume2 size={14} /></button> */}<button type="button" aria-label="Copy response" onClick={() => onCopy(`${result.english_translation}\n\n${result.summary.replace(/\*\*/g, '')}`)}><Copy size={14} /></button></div></div></div>;
+  return <div className="message-row assistant-row"><div className="avatar assistant-avatar"><Sparkles size={15} /></div><div className="assistant-content"><div className="assistant-label">TranslyAi</div><div className="translation-card"><div className="result-heading"><span>English translation</span><button type="button" className="mini-action" aria-label="Copy translation" onClick={() => onCopy(result.english_translation, 'Translation copied')}><Copy size={14} /></button></div>{paragraphs(result.english_translation).map((paragraph, index) => <p key={index}>{paragraph}</p>)}</div><div className="summary-card"><div className="summary-heading"><Sparkles size={14} />TranslyAi summary</div><SummaryText text={result.summary} /></div><div className="message-actions">{/* Text-to-speech is hidden for now: <button type="button" aria-label="Read translation aloud"><Volume2 size={14} /></button> */}<button type="button" aria-label="Copy response" onClick={() => onCopy(`${result.english_translation}\n\n${result.summary.replace(/\*\*/g, '')}`)}><Copy size={14} /></button></div></div></div>;
 }
 
 const paragraphs = (text) => String(text || '').split(/\n{2,}/).map((part) => part.trim()).filter(Boolean);
@@ -694,7 +699,7 @@ function SummaryText({ text }) {
 }
 
 function Thinking() {
-  return <div className="message-row assistant-row thinking-row" role="status"><div className="avatar assistant-avatar"><span className="t-glyph">T</span></div><div className="typing-dots" aria-label="TranslyAi is responding"><span /><span /><span /></div></div>;
+  return <div className="message-row assistant-row thinking-row" role="status"><div className="avatar assistant-avatar"><Sparkles size={15} /></div><div className="typing-dots" aria-label="TranslyAi is responding"><span /><span /><span /></div></div>;
 }
 
 function EmptyState({ greeting, onPrompt }) {
