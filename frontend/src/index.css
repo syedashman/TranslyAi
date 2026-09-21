@@ -318,3 +318,157 @@ button, textarea, select { font: inherit; } button { cursor: pointer; }
 .summary-points li::before { content: '•'; position: absolute; left: 3px; color: #f97316; }
 .summary-points strong { font-weight: 650; color: var(--text); }
 .summary-card p strong { font-weight: 650; color: var(--text); }
+
+/* Fixed app frame: the sidebar and the chat feed scroll on their own, the page never does */
+.app-shell { height: 100vh; height: 100dvh; min-height: 0; overflow: hidden; }
+.sidebar { height: 100%; min-height: 0; overflow-y: auto; }
+.session-list { min-height: 0; }
+.chat-layout { height: 100%; min-height: 0; overflow: hidden; }
+.topbar { flex: none; }
+.conversation { width: 100%; min-height: 0; margin: 0; padding: 38px max(24px, calc((100% - 820px) / 2)) 28px; }
+.composer-wrap { position: static; flex: none; padding: 8px 24px 17px; background: var(--c212121); }
+@media (max-width: 720px) { .conversation { padding: 24px 14px 20px; } .composer-wrap { padding: 8px 10px 12px; } }
+
+/* Dismissible error banner */
+.error-line { display: flex; width: min(100%, 770px); margin: 10px auto 0; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.error-line span { min-width: 0; flex: 1; line-height: 1.45; }
+.error-line button { display: grid; flex: none; margin-top: 1px; padding: 2px; place-items: center; border: 0; border-radius: 4px; color: inherit; background: transparent; opacity: .75; cursor: pointer; }
+.error-line button:hover { opacity: 1; }
+.voice-confirm:disabled { cursor: default; opacity: .7; }
+
+/* Guest mode: sidebar card, limit banner and sign-up prompt */
+.guest-card { display: grid; gap: 10px; margin-top: 8px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.guest-card p { margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.45; }
+.guest-card div, .guest-banner div, .auth-prompt-actions { display: flex; gap: 8px; }
+.guest-banner button, .auth-prompt-actions button { flex: 1; padding: 8px 12px; border: 1px solid var(--border); border-radius: 9px; color: var(--text); background: transparent; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; transition: background .15s ease, opacity .15s ease; }
+.guest-banner button:hover, .auth-prompt-actions button:hover { background: var(--surface-2); }
+.guest-banner button.primary, .auth-prompt-actions button.primary { border-color: #f97316; color: #ffffff; background: #f97316; }
+.guest-banner button.primary:hover, .auth-prompt-actions button.primary:hover { background: #fb923c; }
+.guest-banner { display: flex; width: min(100%, 770px); margin: 0 auto 10px; padding: 12px 14px; align-items: center; justify-content: space-between; gap: 14px; border: 1px solid #f97316; border-radius: 14px; color: var(--text); background: var(--surface); box-shadow: 0 0 22px rgba(249, 115, 22, .14); font-size: 14px; font-weight: 500; }
+.guest-banner div { flex: none; }
+.guest-banner button { flex: none; padding: 7px 16px; }
+.composer textarea:disabled { cursor: not-allowed; opacity: .55; }
+.composer-controls .tool-button:disabled { cursor: not-allowed; opacity: .4; }
+.auth-prompt { width: min(100%, 400px); text-align: center; }
+.auth-prompt-icon { display: grid; width: 46px; height: 46px; margin: 0 auto 14px; place-items: center; border-radius: 13px; color: #ffffff; background: #f97316; box-shadow: 0 0 22px rgba(249, 115, 22, .35); }
+.auth-prompt h2 { margin: 0 0 8px; font-size: 20px; }
+.auth-prompt p { margin: 0 0 18px; color: var(--muted); font-size: 14px; line-height: 1.55; }
+.auth-prompt-actions button { padding: 11px 14px; font-size: 14px; }
+.auth-prompt-close { margin-top: 12px; padding: 6px 10px; border: 0; color: var(--muted); background: transparent; font: inherit; font-size: 13px; cursor: pointer; }
+.auth-prompt-close:hover { color: var(--text); }
+.chat-menu button.danger { white-space: nowrap; }
+@media (max-width: 720px) { .guest-banner { flex-direction: column; align-items: stretch; text-align: center; } .guest-banner div { justify-content: center; } }
+
+/* Delete confirmation modal */
+.delete-modal { width: min(100%, 440px); padding: 26px 28px 22px; border-radius: 18px; }
+.delete-modal h2 { margin: 0 0 14px; font-size: 19px; font-weight: 650; color: var(--text); }
+.delete-modal p { margin: 0 0 26px; color: var(--muted); font-size: 15px; line-height: 1.5; overflow-wrap: anywhere; }
+.delete-modal p strong { font-weight: 600; color: var(--text); }
+.delete-modal-actions { display: flex; justify-content: flex-end; gap: 10px; }
+.delete-modal-actions button { min-width: 84px; padding: 10px 18px; border-radius: 999px; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; transition: background .15s ease, border-color .15s ease; }
+.delete-modal-actions .cancel { border: 1px solid #4a4a4a; color: var(--text); background: transparent; }
+.delete-modal-actions .cancel:hover { background: var(--surface-2); border-color: #6a6a6a; }
+.delete-modal-actions .confirm { border: 1px solid #dc2626; color: #ffffff; background: #dc2626; }
+.delete-modal-actions .confirm:hover { background: #ef4444; border-color: #ef4444; }
+.delete-modal-actions button:focus-visible { outline: 2px solid #f97316; outline-offset: 2px; }
+:root[data-theme='light'] .delete-modal-actions .cancel { border-color: #c9c9cf; }
+@media (max-width: 480px) { .delete-modal { padding: 22px 20px 18px; } }
+
+.empty-state h1 { margin: 0; }
+
+/* Header Log in / Sign up for guests: positioned in the top-right corner of the chat area (styled by Tailwind utilities) */
+.chat-layout { position: relative; }
+.auth-overlay { position: fixed; z-index: 200; inset: 0; overflow-y: auto; background: var(--c212121); }
+@media (max-width: 720px) {
+  .topbar { justify-content: flex-start; gap: 8px; }
+  .mobile-title { min-width: 0; max-width: min(180px, calc(100vw - 250px)); }
+  .mobile-title span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
+
+/* Sub-tagline under the welcome heading: text-gray-400 text-sm md:text-base mt-2 mb-6 max-w-lg text-center mx-auto */
+.empty-state .empty-tagline { @apply text-gray-400 text-sm md:text-base mt-2 mb-6 max-w-lg text-center mx-auto; }
+:root[data-theme='light'] .empty-state .empty-tagline { color: #6b7280; }
+
+/* Brand casing: the summary heading keeps its exact "TranslyAi summary" spelling (no forced uppercase) */
+.summary-heading { text-transform: none; letter-spacing: .02em; font-size: 12px; }
+
+/* Header Share button */
+.topbar-share { display: flex; margin-left: auto; align-items: center; gap: 7px; padding: 7px 14px; border: 1px solid var(--border); border-radius: 999px; color: var(--text); background: transparent; font: inherit; font-size: 14px; font-weight: 500; cursor: pointer; transition: background .15s ease, border-color .15s ease; }
+.topbar-share:hover { background: var(--surface-2); border-color: #5a5a5a; }
+.topbar-share:focus-visible { outline: 2px solid #f97316; outline-offset: 2px; }
+
+/* User message actions (copy / edit) and inline editing */
+.user-message { display: flex; max-width: 72%; flex-direction: column; align-items: flex-end; }
+.user-message .user-bubble { max-width: 100%; }
+.user-message.is-editing { width: min(100%, 640px); max-width: 100%; }
+.user-actions { display: flex; gap: 2px; margin-top: 4px; opacity: 0; transition: opacity .15s ease; }
+.user-message:hover .user-actions, .user-actions:focus-within { opacity: 1; }
+@media (hover: none) { .user-actions { opacity: 1; } }
+.user-actions button { display: grid; width: 28px; height: 28px; place-items: center; border: 0; border-radius: 7px; color: var(--muted); background: transparent; cursor: pointer; transition: background .15s ease, color .15s ease; }
+.user-actions button:hover:not(:disabled) { color: var(--text); background: var(--surface-2); }
+.user-actions button:disabled { cursor: not-allowed; opacity: .4; }
+.user-actions button:focus-visible { outline: 2px solid #f97316; outline-offset: 1px; }
+.edit-box { width: 100%; padding: 12px 14px 10px; border: 1px solid var(--border); border-radius: 18px; background: var(--surface); }
+.edit-box textarea { display: block; width: 100%; max-height: 260px; padding: 0; resize: none; border: 0; outline: 0; color: var(--text); background: transparent; font: inherit; font-size: 15px; line-height: 1.55; }
+.edit-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+.edit-actions button { padding: 7px 16px; border-radius: 999px; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; transition: background .15s ease, opacity .15s ease; }
+.edit-actions .cancel { border: 1px solid var(--border); color: var(--text); background: transparent; }
+.edit-actions .cancel:hover { background: var(--surface-2); }
+.edit-actions .send { border: 1px solid #f97316; color: #ffffff; background: #f97316; }
+.edit-actions .send:hover:not(:disabled) { background: #fb923c; }
+.edit-actions .send:disabled { cursor: not-allowed; opacity: .45; }
+@media (max-width: 720px) { .user-message { max-width: 88%; } }
+
+/* Toast */
+.toast { position: fixed; z-index: 300; bottom: 110px; left: 50%; padding: 9px 18px; border: 1px solid var(--border); border-radius: 999px; color: var(--text); background: var(--surface); box-shadow: 0 10px 30px rgba(0, 0, 0, .35); font-size: 14px; font-weight: 500; transform: translateX(-50%); animation: toast-in .2s ease-out; }
+@keyframes toast-in { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translate(-50%, 0); } }
+
+/* Share modal */
+.share-modal { width: min(100%, 480px); padding: 20px 22px 18px; border-radius: 20px; border-color: rgba(255, 255, 255, .1); background: rgba(38, 38, 42, .82); backdrop-filter: blur(18px); }
+:root[data-theme='light'] .share-modal { border-color: rgba(0, 0, 0, .08); background: rgba(255, 255, 255, .86); }
+.share-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.share-head h2 { margin: 0; font-size: 18px; font-weight: 650; }
+.share-close { display: grid; width: 30px; height: 30px; place-items: center; border: 0; border-radius: 8px; color: var(--muted); background: transparent; cursor: pointer; }
+.share-close:hover { color: var(--text); background: var(--surface-2); }
+.share-preview { padding: 14px 16px; border: 1px solid rgba(255, 255, 255, .09); border-radius: 14px; background: rgba(255, 255, 255, .045); backdrop-filter: blur(10px); }
+:root[data-theme='light'] .share-preview { border-color: rgba(0, 0, 0, .08); background: rgba(0, 0, 0, .03); }
+.share-preview-title { display: flex; align-items: center; gap: 7px; margin-bottom: 9px; color: var(--text); font-size: 14px; font-weight: 650; overflow-wrap: anywhere; }
+.share-preview-title svg { flex: none; color: #f97316; }
+.share-preview-body { position: relative; display: grid; max-height: 170px; gap: 8px; overflow: hidden; }
+.share-preview-body::after { content: ''; position: absolute; right: 0; bottom: 0; left: 0; height: 34px; background: linear-gradient(transparent, rgba(38, 38, 42, .9)); pointer-events: none; }
+:root[data-theme='light'] .share-preview-body::after { background: linear-gradient(transparent, rgba(250, 250, 250, .95)); }
+.share-preview-body p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.share-preview-body p strong { margin-right: 6px; color: var(--text); font-weight: 600; }
+.share-empty { font-style: italic; }
+.share-link { display: flex; align-items: center; gap: 9px; margin-top: 14px; padding: 0 12px; border: 1px solid rgba(255, 255, 255, .09); border-radius: 12px; color: var(--muted); background: rgba(255, 255, 255, .045); }
+:root[data-theme='light'] .share-link { border-color: rgba(0, 0, 0, .08); background: rgba(0, 0, 0, .03); }
+.share-link input { min-width: 0; flex: 1; padding: 11px 0; border: 0; outline: 0; color: var(--text); background: transparent; font: inherit; font-size: 13px; text-overflow: ellipsis; }
+.share-actions { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 14px; }
+.share-action { display: flex; align-items: center; justify-content: center; gap: 7px; padding: 10px 8px; border: 1px solid rgba(255, 255, 255, .1); border-radius: 12px; color: var(--text); background: rgba(255, 255, 255, .06); backdrop-filter: blur(10px); font: inherit; font-size: 13px; font-weight: 600; white-space: nowrap; cursor: pointer; transition: background .15s ease, border-color .15s ease; }
+:root[data-theme='light'] .share-action { border-color: rgba(0, 0, 0, .1); background: rgba(0, 0, 0, .04); }
+.share-action:hover { background: rgba(255, 255, 255, .12); }
+:root[data-theme='light'] .share-action:hover { background: rgba(0, 0, 0, .08); }
+.share-action.primary { border-color: #f97316; color: #ffffff; background: #f97316; }
+.share-action.primary:hover { background: #fb923c; }
+.share-action:focus-visible { outline: 2px solid #f97316; outline-offset: 2px; }
+.share-note { margin: 12px 2px 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+@media (max-width: 480px) { .share-actions { grid-template-columns: repeat(2, 1fr); } }
+
+/* Stop generation button: a blue circle with a white square, shown in place of Send while an answer is loading */
+.stop-button { display: grid; flex: none; width: 33px; height: 33px; place-items: center; border: 0; border-radius: 50%; background: #2563eb; box-shadow: 0 0 16px rgba(37, 99, 235, .35); cursor: pointer; transition: background .15s ease, transform .15s ease; }
+.stop-button:hover { background: #1d4ed8; }
+.stop-button:active { transform: scale(.94); }
+.stop-button:focus-visible { outline: 2px solid #ffffff; outline-offset: 2px; }
+.stop-square { display: block; width: 11px; height: 11px; border-radius: 2px; background: #ffffff; }
+
+/* TranslyAi "T" logo: bold white letter in a dark rounded container */
+.brand-mark, .assistant-avatar, .auth-prompt-icon { color: #ffffff; border: 1px solid #38383f; background: linear-gradient(145deg, #2a2a30, #121214); box-shadow: 0 2px 12px rgba(0, 0, 0, .35); }
+.t-glyph { display: block; font-family: Manrope, 'DM Sans', sans-serif; font-size: 15px; font-weight: 800; line-height: 1; letter-spacing: 0; }
+.brand-mark .t-glyph { font-size: 16px; }
+.t-glyph.t-small { font-size: 13px; }
+.t-glyph.t-large { font-size: 24px; }
+.mobile-title .t-glyph { display: grid; width: 22px; height: 22px; place-items: center; border-radius: 7px; color: #ffffff; border: 1px solid #38383f; background: linear-gradient(145deg, #2a2a30, #121214); }
+
+/* Stop button follows the brand accent (orange) instead of blue */
+.stop-button { background: #f97316; box-shadow: 0 0 16px rgba(249, 115, 22, .38); }
+.stop-button:hover { background: #ea580c; }

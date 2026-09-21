@@ -10,8 +10,9 @@ load_dotenv(find_dotenv(), override=True)
 
 
 WHISPER_PROMPT = (
-    "Transcribe exact spoken Urdu, Roman Urdu, Hinglish, or English audio phonetically. "
-    "Do not add or guess words that were not spoken."
+    "Transcribe the spoken audio word-for-word strictly using English and Roman Urdu script only. "
+    "Absolutely NO Devanagari or Hindi characters. "
+    "Capture every single spoken word with 100% accuracy without skipping or paraphrasing."
 )
 
 

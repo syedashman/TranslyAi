@@ -7,6 +7,7 @@ import { supabase } from './lib/supabase';
 export default function AuthGate() {
   const [session, setSession] = useState(undefined);
   const [profile, setProfile] = useState(null);
+  const [authView, setAuthView] = useState(null); // 'login' | 'signup' while a guest is signing in
 
   useEffect(() => {
     if (!supabase) { setSession(null); return undefined; }
@@ -14,6 +15,15 @@ export default function AuthGate() {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => setSession(nextSession));
     return () => subscription.unsubscribe();
   }, []);
+
+  useEffect(() => { if (session) setAuthView(null); }, [session]);
+
+  useEffect(() => {
+    if (!authView) return undefined;
+    const onKeyDown = (event) => { if (event.key === 'Escape') setAuthView(null); };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [authView]);
 
   const userId = session?.user?.id;
   useEffect(() => {
@@ -34,7 +44,19 @@ export default function AuthGate() {
   }, [userId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (session === undefined) return <div className="auth-shell"><LoaderCircle size={26} className="spin" /></div>;
-  if (!session) return <AuthPage />;
+  if (!session) {
+    // The auth form opens over the guest chat, so the conversation is still there if the guest closes it.
+    return (
+      <>
+        <App key="guest" guest user={null} onRequestAuth={setAuthView} />
+        {authView && (
+          <div className="auth-overlay" role="dialog" aria-modal="true" aria-label={authView === 'signup' ? 'Sign up' : 'Log in'}>
+            <AuthPage key={authView} initialMode={authView} onBack={() => setAuthView(null)} />
+          </div>
+        )}
+      </>
+    );
+  }
 
   const { user } = session;
   const meta = user.user_metadata || {};

@@ -2,14 +2,15 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Archive, ArchiveRestore, ChevronDown, ChevronRight, LoaderCircle, MessageCircle, MoreHorizontal,
-  PanelLeftClose, Pin, PinOff, Search, Sparkles, SquarePen, Trash2, X,
+  PanelLeftClose, Pin, PinOff, Search, SquarePen, Trash2, X,
 } from 'lucide-react';
 import AccountMenu from './AccountMenu';
+import BrandMark from './BrandMark';
+import { CTA_LOGIN, CTA_SIGNUP } from './lib/authCta';
 
 const MENU_WIDTH = 190;
 
 function ChatMenu({ chat, anchor, onClose, onTogglePin, onToggleArchive, onDelete }) {
-  const [confirming, setConfirming] = useState(false);
   const menuRef = useRef(null);
 
   useEffect(() => {
@@ -30,9 +31,10 @@ function ChatMenu({ chat, anchor, onClose, onTogglePin, onToggleArchive, onDelet
   const rect = anchor.getBoundingClientRect();
   const estimatedHeight = chat.is_archived ? 92 : 132;
   const flipUp = rect.bottom + estimatedHeight + 8 > window.innerHeight;
+  const width = Math.min(MENU_WIDTH, window.innerWidth - 16);
   const style = {
-    width: MENU_WIDTH,
-    left: Math.max(8, Math.min(rect.right - MENU_WIDTH, window.innerWidth - MENU_WIDTH - 8)),
+    width,
+    left: Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8)),
     ...(flipUp ? { bottom: window.innerHeight - rect.top + 4 } : { top: rect.bottom + 4 }),
   };
 
@@ -50,9 +52,9 @@ function ChatMenu({ chat, anchor, onClose, onTogglePin, onToggleArchive, onDelet
         type="button"
         role="menuitem"
         className="danger"
-        onClick={() => { if (confirming) { onDelete(chat); onClose(); } else setConfirming(true); }}
+        onClick={() => { onDelete(chat); onClose(); }}
       >
-        <Trash2 size={15} />{confirming ? 'Click again to delete' : 'Delete'}
+        <Trash2 size={15} />Delete
       </button>
     </div>,
     document.body,
@@ -83,7 +85,7 @@ function ChatItem({ chat, active, withIcon, menuOpen, onSelect, onOpenMenu }) {
 }
 
 export default function ChatSidebar({
-  chats, loading, error, onRetry, activeId, health, isOpen, user,
+  chats, loading, error, onRetry, activeId, health, isOpen, user, guest = false, onRequestAuth = () => {},
   onSignOut, onProfileChange, onNew, onSelect, onClose, onTogglePin, onToggleArchive, onDelete,
 }) {
   const [query, setQuery] = useState('');
@@ -116,7 +118,7 @@ export default function ChatSidebar({
   return (
     <aside className={`sidebar ${isOpen ? 'sidebar-open' : ''}`}>
       <div className="sidebar-header">
-        <div className="brand"><div className="brand-mark"><Sparkles size={16} /></div><span>LinguaAI</span></div>
+        <div className="brand"><BrandMark /><span>TranslyAi</span></div>
         <div className="sidebar-header-actions">
           <button type="button" className={`icon-button ${searchOpen ? 'active' : ''}`} onClick={toggleSearch} aria-label="Search chats" aria-pressed={searchOpen}><Search size={18} /></button>
           <button type="button" className="icon-button" onClick={onClose} aria-label="Close sidebar"><PanelLeftClose size={18} /></button>
@@ -147,7 +149,7 @@ export default function ChatSidebar({
         {recent.length > 0 && <div className="history-label">Recents</div>}
         {recent.map((chat) => renderItem(chat))}
 
-        {!loading && !error && !chats.length && <p className="empty-history">Your saved chats will appear here.</p>}
+        {!loading && !error && !chats.length && <p className="empty-history">{guest ? 'Chats are saved when you sign up.' : 'Your saved chats will appear here.'}</p>}
         {term && nothingMatches && <p className="empty-history">No chats match "{query.trim()}".</p>}
 
         {archived.length > 0 && (
@@ -164,7 +166,12 @@ export default function ChatSidebar({
         <ChatMenu chat={menuChat} anchor={menu.anchor} onClose={closeMenu} onTogglePin={onTogglePin} onToggleArchive={onToggleArchive} onDelete={onDelete} />
       )}
 
-      <AccountMenu user={user} onSignOut={onSignOut} onProfileChange={onProfileChange} />
+      {guest ? (
+        <div className="guest-card">
+          <p>Sign up to save your chats and pick up where you left off on any device.</p>
+          <div><button type="button" className={`${CTA_LOGIN} flex-1`} onClick={() => onRequestAuth('login')}>Log in</button><button type="button" className={`${CTA_SIGNUP} flex-1`} onClick={() => onRequestAuth('signup')}>Sign up</button></div>
+        </div>
+      ) : <AccountMenu user={user} onSignOut={onSignOut} onProfileChange={onProfileChange} />}
       <div className="sidebar-footer">
         <div className={`status-dot ${health}`} />
         <span>{health === 'connected' ? 'Backend connected' : health === 'checking' ? 'Checking connection' : 'Backend offline'}</span>

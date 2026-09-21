@@ -1,4 +1,5 @@
 from typing import Any, Literal, Optional
+from uuid import UUID
 
 from pydantic import BaseModel, Field
 
@@ -6,6 +7,12 @@ from pydantic import BaseModel, Field
 class TranslationRequest(BaseModel):
     text: str = Field(..., min_length=1)
     source_language: Optional[str] = None
+    # True when the text was dictated (speech-to-text preview), so it is cleaned like a spoken transcript.
+    from_speech: bool = False
+
+
+class TranscriptionResponse(BaseModel):
+    text: str
 
 
 class TranslationResponse(BaseModel):
@@ -45,6 +52,10 @@ class MessageIn(BaseModel):
 
 class SaveMessagesRequest(BaseModel):
     messages: list[MessageIn] = Field(..., min_length=1, max_length=20)
+
+
+class DeleteMessagesRequest(BaseModel):
+    message_ids: list[UUID] = Field(..., min_length=1, max_length=200)
 
 
 class MessageOut(BaseModel):

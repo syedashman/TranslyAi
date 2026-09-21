@@ -146,3 +146,12 @@ class ChatStore:
         ]
         created = await cls._request("POST", "/messages", token, body=rows) or []
         return sorted(created, key=lambda row: row.get("seq", 0))
+
+    @classmethod
+    async def delete_messages(cls, token: str, chat_id: UUID, message_ids: list[UUID]) -> int:
+        """Removes the given messages from one chat and returns how many rows were actually deleted."""
+        id_list = ",".join(str(message_id) for message_id in message_ids)
+        rows = await cls._request(
+            "DELETE", "/messages", token, params={"chat_id": f"eq.{chat_id}", "id": f"in.({id_list})"}
+        )
+        return len(rows or [])

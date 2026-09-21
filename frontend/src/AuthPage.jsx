@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { LoaderCircle, Sparkles } from 'lucide-react';
+import { LoaderCircle } from 'lucide-react';
+import BrandMark from './BrandMark';
 import { isSupabaseConfigured, supabase } from './lib/supabase';
 
 const MIN_PASSWORD_LENGTH = 6;
@@ -25,8 +26,8 @@ function GoogleLogo() {
   );
 }
 
-export default function AuthPage() {
-  const [mode, setMode] = useState('login');
+export default function AuthPage({ initialMode = 'login', onBack }) {
+  const [mode, setMode] = useState(initialMode);
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -81,7 +82,7 @@ export default function AuthPage() {
   return (
     <div className="auth-shell">
       <div className="auth-card">
-        <div className="auth-brand"><div className="brand-mark"><Sparkles size={16} /></div><span>LinguaAI</span></div>
+        <div className="auth-brand"><BrandMark /><span>TranslyAi</span></div>
         <h1>{isSignup ? 'Create your account' : 'Welcome back'}</h1>
         <p className="auth-subtitle">{isSignup ? 'Sign up to translate text and voice into clear English.' : 'Log in to continue your translations.'}</p>
 
@@ -117,6 +118,7 @@ export default function AuthPage() {
           {isSignup ? 'Already have an account?' : "Don't have an account?"}{' '}
           <button type="button" onClick={() => switchMode(isSignup ? 'login' : 'signup')}>{isSignup ? 'Log in' : 'Sign up'}</button>
         </p>
+        {onBack && <p className="auth-switch"><button type="button" onClick={onBack}>Continue as guest</button></p>}
       </div>
     </div>
   );

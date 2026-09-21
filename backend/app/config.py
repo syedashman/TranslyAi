@@ -7,7 +7,7 @@ ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 
 
 class Settings(BaseSettings):
-    app_name: str = "AI Translator"
+    app_name: str = "TranslyAi"
     frontend_origin: str = "http://localhost:5173"
     backend_port: int = 8000
     gemini_api_key: str = ""

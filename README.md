@@ -1,4 +1,4 @@
-# AI Translator
+# TranslyAi
 
 A multilingual speech-to-text and translation application built with a React + Vite frontend and a Python + FastAPI backend.
 

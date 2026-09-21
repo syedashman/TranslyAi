@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { Check, Plus, X } from 'lucide-react';
+import { Check, LoaderCircle, Plus, X } from 'lucide-react';
 
 const DOT_GAP = 7;
 const DOT_RADIUS = 1.7;
@@ -7,7 +7,7 @@ const MAX_BAR = 26;
 const STEP_MS = 45;
 
 // Inline voice input bar: a capsule with a live dotted waveform driven by the microphone level.
-export default function VoiceBar({ stream, onCancel, onConfirm }) {
+export default function VoiceBar({ stream, transcribing = false, onCancel, onConfirm }) {
   const canvasRef = useRef(null);
   const handlers = useRef({ onCancel, onConfirm });
   handlers.current = { onCancel, onConfirm };
@@ -106,8 +106,8 @@ export default function VoiceBar({ stream, onCancel, onConfirm }) {
     <div className="voice-bar" role="group" aria-label="Voice input">
       <button type="button" className="voice-icon" disabled aria-label="Add" title="Add"><Plus size={20} /></button>
       <canvas ref={canvasRef} className="voice-wave" aria-hidden="true" />
-      <button type="button" className="voice-icon" onClick={onCancel} aria-label="Cancel recording" title="Cancel (Esc)"><X size={20} /></button>
-      <button type="button" className="voice-confirm" onClick={onConfirm} aria-label="Send recording" title="Send (Enter)"><Check size={20} strokeWidth={2.6} /></button>
+      <button type="button" className="voice-icon" onClick={onCancel} aria-label={transcribing ? 'Cancel transcription' : 'Cancel recording'} title="Cancel (Esc)"><X size={20} /></button>
+      <button type="button" className="voice-confirm" onClick={onConfirm} disabled={transcribing} aria-label={transcribing ? 'Transcribing' : 'Transcribe recording'} title={transcribing ? 'Transcribing...' : 'Done (Enter)'}>{transcribing ? <LoaderCircle size={20} className="spin" /> : <Check size={20} strokeWidth={2.6} />}</button>
     </div>
   );
 }

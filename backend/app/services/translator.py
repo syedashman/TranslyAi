@@ -13,6 +13,7 @@ async def translate_and_summarize(
     text: str,
     source_language: Optional[str] = None,
     audio_path: Optional[str] = None,
+    spoken: bool = False,
 ):
     """Pipeline entry-point for transcription, detection, translation, and summarization."""
     if not text and not audio_path:
@@ -29,7 +30,7 @@ async def translate_and_summarize(
         raise ValueError("Unable to detect the input language automatically.")
 
     english_translation, translated = await asyncio.to_thread(
-        TranslationService.translate_with_status, text, bool(audio_path)
+        TranslationService.translate_with_status, text, spoken or bool(audio_path)
     )
     if translated:
         summary = await asyncio.to_thread(SummarizerService.summarize, english_translation)

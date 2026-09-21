@@ -1,41 +1,85 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 import ChatSidebar from './ChatSidebar';
+import DeleteModal from './DeleteModal';
+import ShareModal from './ShareModal';
 import VoiceBar from './VoiceBar';
 import {
-  ArrowUp, ChevronDown, Copy, Languages, LoaderCircle,
-  Menu, Mic, PanelLeftOpen, Paperclip, Sparkles, Volume2, X,
+  ArrowUp, Copy, LoaderCircle,
+  Menu, Mic, PanelLeftOpen, Paperclip, Pencil, Share, Sparkles, X,
 } from 'lucide-react';
 import { API_BASE_URL } from './lib/config';
+import { describeError, isBusyResult, MESSAGES } from './lib/errors';
+import { CTA_LOGIN, CTA_SIGNUP } from './lib/authCta';
+import { copyText } from './lib/clipboard';
+import { bumpGuestCount, getGuestCount, GUEST_LIMIT } from './lib/guest';
 import {
-  createChat, deleteChat, fetchMessages, generateTitle, listChats, saveMessages, setArchived, setPinned,
+  createChat, deleteChat, deleteMessages, fetchMessages, generateTitle, listChats, saveMessages, setArchived, setPinned,
   sortChats, toApiMessage, toUiMessage,
 } from './lib/chatApi';
 
 const AUDIO_TIMEOUT_MS = 60000;
 const COLLAPSE_KEY = 'linguaai-sidebar-collapsed';
-const TIMEOUT_MESSAGE = 'Connection timed out. Please try again';
-const languages = [
-  ['auto', 'Auto-detect'], ['es', 'Spanish'], ['fr', 'French'], ['de', 'German'], ['it', 'Italian'],
-  ['pt', 'Portuguese'], ['ja', 'Japanese'], ['ko', 'Korean'], ['zh', 'Chinese'], ['ar', 'Arabic'],
-  ['ur', 'Urdu'], ['en', 'English'],
-];
+const CHAT_PARAM = 'chatId';
+const CHAT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const ERROR_VISIBLE_MS = 9000;
 
-function App({ user, onSignOut, onProfileChange }) {
+// The open chat lives in the address bar (?chatId=...) so a refresh or a shared link reopens it.
+function readChatIdFromUrl() {
+  try {
+    const id = new URLSearchParams(window.location.search).get(CHAT_PARAM);
+    return id && CHAT_ID_PATTERN.test(id) ? id : null;
+  } catch { return null; }
+}
+
+// mode: 'push' adds a history entry, 'replace' rewrites the current one, 'none' leaves the address alone.
+function writeChatIdToUrl(id, mode) {
+  if (mode === 'none') return;
+  try {
+    const url = new URL(window.location.href);
+    if (id) url.searchParams.set(CHAT_PARAM, id); else url.searchParams.delete(CHAT_PARAM);
+    if (url.href === window.location.href) return;
+    window.history[mode === 'replace' ? 'replaceState' : 'pushState']({ chatId: id }, '', url);
+  } catch { /* the address bar is a convenience; the app works without it */ }
+}
+// Each heading has a matching sub-tagline; one pair is chosen on load and on every new chat.
+const GREETINGS = [
+  { heading: 'Where should we start?', tagline: 'Translate text or voice into clear English, then get a concise summary.' },
+  { heading: 'What would you like to translate today?', tagline: 'High-fidelity voice translation and instant AI summaries at your fingertips.' },
+  { heading: 'Ready for your meeting notes?', tagline: 'Capture meeting audio and convert it to actionable summaries instantly.' },
+  { heading: 'How can TranslyAi help you right now?', tagline: 'Translate text or voice into clear English, then get a concise summary.' },
+];
+const pickGreeting = (previous) => {
+  const options = GREETINGS.filter((greeting) => greeting.heading !== previous?.heading);
+  return options[Math.floor(Math.random() * options.length)];
+};
+
+function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfileChange }) {
   const [chats, setChats] = useState([]);
+  const [initialChatId] = useState(() => (guest ? null : readChatIdFromUrl()));
+  const [greeting, setGreeting] = useState(() => pickGreeting());
+  const [guestCount, setGuestCount] = useState(getGuestCount);
+  const [authPromptOpen, setAuthPromptOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState(null); // the chat waiting for delete confirmation
+  const [shareOpen, setShareOpen] = useState(false);
+  const [editingId, setEditingId] = useState(null); // the user message being edited
+  const [toast, setToast] = useState('');
+  const toastTimerRef = useRef(null);
   const [chatsLoading, setChatsLoading] = useState(true);
   const [chatsError, setChatsError] = useState('');
-  const [activeId, setActiveIdState] = useState(null);
+  const [activeId, setActiveIdState] = useState(initialChatId);
   const [messages, setMessages] = useState([]);
-  const [messagesLoading, setMessagesLoading] = useState(false);
+  const [messagesLoading, setMessagesLoading] = useState(Boolean(initialChatId));
   const [messagesError, setMessagesError] = useState('');
   const [text, setText] = useState('');
-  const [sourceLanguage, setSourceLanguage] = useState('auto');
   const [isLoading, setIsLoading] = useState(false);
   const [pending, setPending] = useState(null); // { chatId } while an answer is awaited
   const [isSaving, setIsSaving] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingStream, setRecordingStream] = useState(null);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [textFromSpeech, setTextFromSpeech] = useState(false); // the input holds dictated text
+  const [focusTick, setFocusTick] = useState(0);
   const [health, setHealth] = useState('checking');
   const [error, setError] = useState('');
   const [audioFile, setAudioFile] = useState(null);
@@ -43,17 +87,22 @@ function App({ user, onSignOut, onProfileChange }) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     try { return localStorage.getItem(COLLAPSE_KEY) === '1'; } catch { return false; }
   });
-  const activeIdRef = useRef(null);
+  const activeIdRef = useRef(initialChatId);
   const chatsRef = useRef([]);
   chatsRef.current = chats;
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const recordingCancelledRef = useRef(false);
+  const transcribeAbortRef = useRef(null);
+  const abortRef = useRef(null); // AbortController of the translation request that is in flight
+  const inflightIdRef = useRef(null); // id of the optimistic message that request belongs to
   const fileInputRef = useRef(null);
   const textareaRef = useRef(null);
   const conversationRef = useRef(null);
   const activeChat = chats.find((chat) => chat.id === activeId) || null;
   const busy = isLoading || isSaving;
+  const limitReached = guest && guestCount >= GUEST_LIMIT;
+  const freeLeft = Math.max(0, GUEST_LIMIT - guestCount);
 
   const updateCollapsed = (collapsed) => {
     setSidebarCollapsed(collapsed);
@@ -65,21 +114,68 @@ function App({ user, onSignOut, onProfileChange }) {
     else updateCollapsed(true);
   };
 
-  const setActive = (id) => { activeIdRef.current = id; setActiveIdState(id); };
+  const setActive = (id, urlMode = 'push') => { activeIdRef.current = id; setActiveIdState(id); writeChatIdToUrl(id, urlMode); };
   const patchChat = (id, changes) => setChats((current) => sortChats(current.map((chat) => (chat.id === id ? { ...chat, ...changes } : chat))));
 
-  const refreshChats = useCallback(async () => {
+  const refreshChats = useCallback(async ({ validateActive = false } = {}) => {
+    if (guest) { setChatsLoading(false); return; } // guests have no saved chats
     setChatsLoading(true); setChatsError('');
-    try { setChats(sortChats(await listChats())); }
+    try {
+      const list = sortChats(await listChats());
+      setChats(list);
+      // A link to a chat that no longer exists (or isn't yours) falls back to a new chat instead of an empty screen.
+      if (validateActive && activeIdRef.current && !list.some((chat) => chat.id === activeIdRef.current)) {
+        activeIdRef.current = null; setActiveIdState(null); writeChatIdToUrl(null, 'replace');
+        setMessages([]); setMessagesLoading(false); setMessagesError('');
+        setError("We couldn't find that conversation, so a new chat was opened.");
+      }
+    }
     catch (loadError) { setChatsError(`Couldn't load your chats. ${loadError.message}`); }
     finally { setChatsLoading(false); }
+  }, [guest]);
+
+  // On first load (including a hard refresh) reopen the chat named in the address bar.
+  useEffect(() => {
+    refreshChats({ validateActive: true });
+    if (initialChatId) loadMessages(initialChatId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshChats]);
+
+  // Back/forward buttons move between the chats that were opened.
+  const popstateRef = useRef(() => {});
+  popstateRef.current = () => {
+    if (guest) return;
+    const id = readChatIdFromUrl();
+    if (id === activeIdRef.current) return;
+    if (id) openChat(id, 'none'); else resetToNewChat('none');
+  };
+  useEffect(() => {
+    const onPopState = () => popstateRef.current();
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
   }, []);
 
-  useEffect(() => { refreshChats(); }, [refreshChats]);
+  // Error banners fade away on their own; the close button dismisses them sooner.
+  useEffect(() => {
+    if (!error) return undefined;
+    const timer = window.setTimeout(() => setError(''), ERROR_VISIBLE_MS);
+    return () => window.clearTimeout(timer);
+  }, [error]);
 
   useEffect(() => {
     if (textareaRef.current) resizeTextarea(textareaRef.current);
+    if (!text) setTextFromSpeech(false);
   }, [text]);
+
+  // After dictation the box takes focus, with the cursor at the end, so the text can be checked or edited.
+  useEffect(() => {
+    if (!focusTick) return;
+    const box = textareaRef.current;
+    if (!box) return;
+    box.focus();
+    box.setSelectionRange(box.value.length, box.value.length);
+    resizeTextarea(box);
+  }, [focusTick]);
 
   useEffect(() => {
     if (conversationRef.current) conversationRef.current.scrollTop = conversationRef.current.scrollHeight;
@@ -114,18 +210,21 @@ function App({ user, onSignOut, onProfileChange }) {
     }
   };
 
-  const startNewChat = () => {
-    setActive(null); setMessages([]); setMessagesLoading(false); setMessagesError('');
-    setText(''); setAudioFile(null); setError(''); setSidebarOpen(false);
+  const resetToNewChat = (urlMode) => {
+    setActive(null, urlMode); setMessages([]); setMessagesLoading(false); setMessagesError('');
+    setText(''); setAudioFile(null); setError(''); setSidebarOpen(false); setEditingId(null); setShareOpen(false);
+    setGreeting((previous) => pickGreeting(previous));
     textareaRef.current?.focus();
   };
+  const startNewChat = () => resetToNewChat('push');
 
-  const selectChat = (chatId) => {
+  const openChat = (chatId, urlMode) => {
     setSidebarOpen(false);
     if (chatId === activeIdRef.current) return;
-    setActive(chatId); setMessages([]); setText(''); setAudioFile(null); setError('');
+    setActive(chatId, urlMode); setMessages([]); setText(''); setAudioFile(null); setError(''); setEditingId(null); setShareOpen(false);
     loadMessages(chatId);
   };
+  const selectChat = (chatId) => openChat(chatId, 'push');
 
   const togglePin = async (chat) => {
     const next = !chat.is_pinned;
@@ -147,7 +246,7 @@ function App({ user, onSignOut, onProfileChange }) {
   const removeChat = async (chat) => {
     setError('');
     setChats((current) => current.filter((item) => item.id !== chat.id));
-    if (activeIdRef.current === chat.id) startNewChat();
+    if (activeIdRef.current === chat.id) resetToNewChat('replace');
     try { await deleteChat(chat.id); }
     catch (actionError) { setError(`Couldn't delete the chat. ${actionError.message}`); refreshChats(); }
   };
@@ -158,6 +257,30 @@ function App({ user, onSignOut, onProfileChange }) {
     generateTitle(chatId, source)
       .then((titled) => patchChat(chatId, { title: titled.title }))
       .catch((titleError) => console.warn('Title generation skipped:', titleError.message));
+  };
+
+  const showToast = (message) => {
+    setToast(message);
+    window.clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = window.setTimeout(() => setToast(''), 2200);
+  };
+  useEffect(() => () => window.clearTimeout(toastTimerRef.current), []);
+  const copyWithToast = async (value, label = 'Copied to clipboard') => {
+    if (await copyText(value)) showToast(label);
+    else setError("Couldn't copy to the clipboard. Please copy it manually.");
+  };
+
+  // Guests get GUEST_LIMIT free messages; the sign-up prompt opens when they are used up.
+  const blockedByGuestLimit = () => {
+    if (!limitReached) return false;
+    setAuthPromptOpen(true);
+    return true;
+  };
+  const countGuestMessage = (result) => {
+    if (!guest || isBusyResult(result?.english_translation)) return;
+    const next = Math.max(bumpGuestCount(), guestCount + 1);
+    setGuestCount(next);
+    if (next >= GUEST_LIMIT) setAuthPromptOpen(true);
   };
 
   // Puts the user's message on screen before the backend answers and starts the "thinking" indicator.
@@ -171,14 +294,32 @@ function App({ user, onSignOut, onProfileChange }) {
     setMessages((current) => current.filter((item) => item.id !== userMessage.id));
   };
 
+  // One AbortController per translation request; Stop (or an edit that replaces the request) aborts it.
+  const beginRequest = (userMessage) => {
+    const controller = new AbortController();
+    abortRef.current = controller;
+    inflightIdRef.current = userMessage.id;
+    return controller;
+  };
+  const isCurrentRequest = (controller) => abortRef.current === controller;
+  const endRequest = (controller) => {
+    if (!isCurrentRequest(controller)) return; // a newer request took over, so its state is not ours to reset
+    abortRef.current = null; inflightIdRef.current = null;
+    setIsLoading(false);
+  };
+  const isAbortError = (error) => axios.isCancel(error) || error?.name === 'AbortError' || error?.code === 'ERR_CANCELED';
+  const stopGeneration = () => abortRef.current?.abort();
+  useEffect(() => () => abortRef.current?.abort(), []);
+
   // Shows the assistant's answer, then saves the exchange (creating the chat first if this is a brand new conversation).
-  const appendConversation = async (targetChatId, userMessage, result) => {
-    const assistantMessage = { id: crypto.randomUUID(), role: 'assistant', result, createdAt: Date.now() };
+  const appendConversation = async (targetChatId, userMessage, result, replaceIds = []) => {
+    const assistantMessage = { id: crypto.randomUUID(), role: 'assistant', result, createdAt: Date.now(), local: true };
     // The user's message is normally already on screen; only add it if the view was reloaded meanwhile.
     if (activeIdRef.current === targetChatId) {
       setMessages((current) => [...(current.some((item) => item.id === userMessage.id) ? current : [...current, userMessage]), assistantMessage]);
     }
 
+    if (guest) return; // guest chats live only on this screen
     setIsSaving(true);
     try {
       let chatId = targetChatId;
@@ -190,71 +331,127 @@ function App({ user, onSignOut, onProfileChange }) {
         const chat = await createChat();
         chatId = chat.id;
         setChats((current) => sortChats([{ ...chat, title: makeTitle(userText || usableTranslation || userMessage.audioName) }, ...current]));
-        if (activeIdRef.current === null) setActive(chatId);
+        if (activeIdRef.current === null) setActive(chatId, 'replace');
         requestTitle(chatId, userText || usableTranslation || userMessage.audioName || '');
       }
-      await saveMessages(chatId, [toApiMessage(userMessage), toApiMessage(assistantMessage)]);
+      // An edited prompt replaces the exchange it came from, so the old rows go before the new ones are stored.
+      if (replaceIds.length) await deleteMessages(chatId, replaceIds);
+      const saved = await saveMessages(chatId, [toApiMessage(userMessage), toApiMessage(assistantMessage)]);
+      // Later edits need the stored ids, so the on-screen messages take them over.
+      const savedUser = saved?.find((row) => row.role === 'user');
+      const savedAssistant = saved?.find((row) => row.role === 'assistant');
+      if (savedUser && savedAssistant) {
+        setMessages((current) => current.map((item) => (item.id === userMessage.id ? { ...item, id: savedUser.id, local: false } : item.id === assistantMessage.id ? { ...item, id: savedAssistant.id, local: false } : item)));
+      }
       patchChat(chatId, { updated_at: new Date().toISOString() });
     } catch (saveError) {
-      setError(`This reply couldn't be saved to your chat history. ${saveError.message}`);
+      setError(`${replaceIds.length ? "Your edit couldn't be saved to your chat history." : "This reply couldn't be saved to your chat history."} ${saveError.message}`);
     } finally { setIsSaving(false); }
+  };
+
+  const requestTranslation = async (payload, signal) => {
+    const response = await fetch(`${API_BASE_URL}/api/translate`, {
+      method: 'POST',
+      signal,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw Object.assign(new Error(`HTTP ${response.status}`), { status: response.status, detail: body?.detail });
+    }
+    return response.json();
+  };
+
+  // Resubmits an edited prompt: it and everything after it are replaced by the new exchange (like ChatGPT).
+  // Editing stays possible while an answer is loading: the request in flight is dropped in favour of the edit.
+  const submitEdit = async (message, newText) => {
+    const input = newText.trim();
+    if (!input || blockedByGuestLimit()) return;
+    if (isSaving) { showToast('Saving your last message, try again in a moment'); return; }
+    const index = messages.findIndex((item) => item.id === message.id);
+    if (index < 0) return;
+    const droppedId = abortRef.current ? inflightIdRef.current : null;
+    abortRef.current?.abort();
+    const snapshot = messages.filter((item) => item.id !== droppedId);
+    const replaceIds = messages.slice(index).filter((item) => !item.local && item.id !== droppedId).map((item) => item.id);
+    const targetChatId = activeIdRef.current;
+    const userMessage = { id: crypto.randomUUID(), role: 'user', content: input, createdAt: Date.now(), local: true };
+    const controller = beginRequest(userMessage);
+    setEditingId(null); setError(''); setIsLoading(true);
+    setMessages([...messages.slice(0, index), userMessage]);
+    setPending({ chatId: targetChatId });
+    try {
+      const data = await requestTranslation({ text: input, source_lang: 'auto', from_speech: false }, controller.signal);
+      if (!isCurrentRequest(controller)) return;
+      setPending(null); setIsLoading(false);
+      if (isBusyResult(data.english_translation)) setError(MESSAGES.busy);
+      countGuestMessage(data);
+      await appendConversation(targetChatId, userMessage, data, guest ? [] : replaceIds);
+    } catch (editError) {
+      if (!isCurrentRequest(controller)) return;
+      setPending(null);
+      setMessages(snapshot); // nothing was answered, so the earlier conversation comes back
+      if (!isAbortError(editError)) setError(describeError(editError, 'Translation failed. Please try again.'));
+    } finally { endRequest(controller); }
   };
 
   const submitText = async (event) => {
     event?.preventDefault();
-    if (busy) return;
+    if (busy || blockedByGuestLimit()) return;
     if (audioFile) { submitAudio(audioFile); return; }
     if (!text.trim()) { setError('Write a message or attach an audio clip to begin.'); return; }
     const targetChatId = activeIdRef.current;
     const input = text.trim();
-    const payload = { text: input, source_lang: 'auto' };
-    const userMessage = { id: crypto.randomUUID(), role: 'user', content: input, createdAt: Date.now() };
+    const fromSpeech = textFromSpeech;
+    const payload = { text: input, source_lang: 'auto', from_speech: fromSpeech };
+    const userMessage = { id: crypto.randomUUID(), role: 'user', content: input, createdAt: Date.now(), local: true };
+    const controller = beginRequest(userMessage);
     // Optimistic flow: clear the box, show the message and the thinking indicator now, then wait for the backend.
     setText(''); setError(''); setIsLoading(true);
     showUserMessage(targetChatId, userMessage);
     try {
-      const response = await fetch(`${API_BASE_URL}/api/translate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
-      const data = await response.json();
+      const data = await requestTranslation(payload, controller.signal);
+      if (!isCurrentRequest(controller)) return;
       setPending(null); setIsLoading(false);
+      if (isBusyResult(data.english_translation)) setError(MESSAGES.busy);
+      countGuestMessage(data);
       await appendConversation(targetChatId, userMessage, data);
     } catch (err) {
-      console.error('API Call Failed Details:', err);
+      if (!isCurrentRequest(controller)) return; // replaced by an edit
       failUserMessage(userMessage);
-      setText((current) => current || input);
-      setError(isNetworkOrTimeoutError(err) ? TIMEOUT_MESSAGE : `Translation failed: ${err.message}`);
-    } finally { setIsLoading(false); }
+      setText((current) => current || input); // the text goes back into the box, whether it failed or was stopped
+      if (fromSpeech) setTextFromSpeech(true);
+      if (isAbortError(err)) setFocusTick((tick) => tick + 1); // back to the box so the text can be edited or re-sent
+      else setError(describeError(err, 'Translation failed. Please try again.'));
+    } finally { endRequest(controller); }
   };
 
   const submitAudio = async (file) => {
-    if (!file || busy) return;
+    if (!file || busy || blockedByGuestLimit()) return;
     const targetChatId = activeIdRef.current;
-    const userMessage = { id: crypto.randomUUID(), role: 'user', content: '', audioName: file.name, createdAt: Date.now() };
+    const userMessage = { id: crypto.randomUUID(), role: 'user', content: '', audioName: file.name, createdAt: Date.now(), local: true };
+    const controller = beginRequest(userMessage);
     setAudioFile(null); setError(''); setIsLoading(true);
     showUserMessage(targetChatId, userMessage);
     const formData = new FormData(); formData.append('file', file);
-    if (sourceLanguage !== 'auto') formData.append('source_language', sourceLanguage);
     try {
-      const response = await axios.post(`${API_BASE_URL}/api/audio`, formData, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: AUDIO_TIMEOUT_MS });
+      const response = await axios.post(`${API_BASE_URL}/api/audio`, formData, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: AUDIO_TIMEOUT_MS, signal: controller.signal });
+      if (!isCurrentRequest(controller)) return;
       setPending(null); setIsLoading(false);
+      if (isBusyResult(response.data?.english_translation)) setError(MESSAGES.busy);
+      countGuestMessage(response.data);
       await appendConversation(targetChatId, userMessage, response.data);
     } catch (requestError) {
+      if (!isCurrentRequest(controller)) return;
       failUserMessage(userMessage);
       setAudioFile(file); // kept as an attachment so pressing Send retries it
-      setError(isNetworkOrTimeoutError(requestError) ? TIMEOUT_MESSAGE : requestError.response?.data?.detail || 'Audio processing failed.');
-    } finally { setIsLoading(false); }
+      if (!isAbortError(requestError)) setError(describeError(requestError, 'Audio processing failed. Please try again.'));
+    } finally { endRequest(controller); }
   };
 
-  // The recorder's onstop runs later, so it calls the latest submitAudio through a ref.
-  const submitAudioRef = useRef(submitAudio);
-  submitAudioRef.current = submitAudio;
-
   const startRecording = async () => {
-    if (isRecording || busy) return;
+    if (isRecording || busy || blockedByGuestLimit()) return;
     if (!navigator.mediaDevices?.getUserMedia) { setError('Microphone recording is not supported in this browser.'); return; }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -266,18 +463,53 @@ function App({ user, onSignOut, onProfileChange }) {
       recorder.onstop = () => {
         stream.getTracks().forEach((track) => track.stop());
         mediaRecorderRef.current = null;
-        setRecordingStream(null); setIsRecording(false);
-        if (recordingCancelledRef.current) { audioChunksRef.current = []; return; }
+        setRecordingStream(null);
         const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
         audioChunksRef.current = [];
-        if (!blob.size) { setError('No audio was captured. Please try again.'); return; }
-        submitAudioRef.current(new File([blob], 'recording.webm', { type: 'audio/webm' }));
+        if (recordingCancelledRef.current) { setIsRecording(false); return; }
+        if (!blob.size) { setIsRecording(false); setError('No audio was captured. Please try again.'); return; }
+        transcribeRecording(new File([blob], 'recording.webm', { type: 'audio/webm' }));
       };
       recorder.start(); setRecordingStream(stream); setIsRecording(true); setError('');
     } catch { setError('Microphone access was not granted.'); }
   };
 
-  // Confirm sends the clip; cancel throws it away. Both release the microphone through the recorder's onstop.
+  // Confirm turns the clip into text for review (nothing is sent to the chat); cancel throws it away.
+  // Both release the microphone through the recorder's onstop.
+  const transcribeRecording = async (file) => {
+    const controller = new AbortController();
+    transcribeAbortRef.current = controller;
+    setIsTranscribing(true); setError('');
+    let cancelled = false;
+    try {
+      const formData = new FormData(); formData.append('file', file);
+      const response = await axios.post(`${API_BASE_URL}/api/transcribe`, formData, { timeout: AUDIO_TIMEOUT_MS, signal: controller.signal });
+      const transcript = String(response.data?.text || '').trim();
+      if (transcript) {
+        setText((current) => (current.trim() ? `${current.trim()} ${transcript}` : transcript));
+        setTextFromSpeech(true);
+        // The backend converts to Roman script; if that step was unavailable the user is told before sending.
+        if (hasNonLatinScript(transcript)) setError('This transcript is not in Roman Urdu/English script. Please review it before sending.');
+      } else setError("We couldn't hear any speech in that recording. Please try again.");
+    } catch (transcribeError) {
+      cancelled = axios.isCancel(transcribeError);
+      if (!cancelled) {
+        setAudioFile(file); // keep the clip so Send can still translate it directly
+        setError(describeError(transcribeError, 'Transcription failed. Please try again.'));
+      }
+    } finally {
+      transcribeAbortRef.current = null;
+      setIsTranscribing(false); setIsRecording(false);
+      if (!cancelled) setFocusTick((tick) => tick + 1);
+    }
+  };
+
+  const cancelVoice = () => {
+    if (transcribeAbortRef.current) transcribeAbortRef.current.abort();
+    else finishRecording(false);
+  };
+  const confirmVoice = () => { if (!transcribeAbortRef.current) finishRecording(true); };
+
   const finishRecording = (send) => {
     const recorder = mediaRecorderRef.current;
     if (!recorder || recorder.state === 'inactive') return;
@@ -286,6 +518,7 @@ function App({ user, onSignOut, onProfileChange }) {
   };
 
   useEffect(() => () => {
+    transcribeAbortRef.current?.abort();
     const recorder = mediaRecorderRef.current;
     if (recorder && recorder.state !== 'inactive') { recordingCancelledRef.current = true; recorder.stop(); }
   }, []);
@@ -294,16 +527,25 @@ function App({ user, onSignOut, onProfileChange }) {
     <div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
       <ChatSidebar
         chats={chats} loading={chatsLoading} error={chatsError} onRetry={refreshChats}
-        activeId={activeId} health={health} isOpen={sidebarOpen} user={user}
+        activeId={activeId} health={health} isOpen={sidebarOpen} user={user} guest={guest} onRequestAuth={onRequestAuth}
         onSignOut={onSignOut} onProfileChange={onProfileChange}
         onNew={startNewChat} onSelect={selectChat} onClose={closeSidebar}
-        onTogglePin={togglePin} onToggleArchive={toggleArchive} onDelete={removeChat}
+        onTogglePin={togglePin} onToggleArchive={toggleArchive} onDelete={setDeleteTarget}
       />
       <main className="chat-layout">
         <header className="topbar">
           <button type="button" className="icon-button mobile-menu" onClick={() => setSidebarOpen(true)} aria-label="Open sidebar"><Menu size={19} /></button>
           <button type="button" className="icon-button expand-sidebar" onClick={() => updateCollapsed(false)} aria-label="Open sidebar"><PanelLeftOpen size={19} /></button>
-          <div className="mobile-title"><Sparkles size={16} /><span>{activeChat?.title || 'New chat'}</span></div>
+          <div className="mobile-title"><span className="t-glyph t-small">T</span><span>{activeChat?.title || 'New chat'}</span></div>
+          {!guest && activeId && (
+            <button type="button" className="topbar-share" onClick={() => setShareOpen(true)} aria-label="Share chat"><Share size={16} />Share</button>
+          )}
+          {!user && (
+            <div className="topbar-auth absolute right-4 top-[15px] z-20 flex items-center gap-2 sm:top-3">
+              <button type="button" className={CTA_LOGIN} onClick={() => onRequestAuth('login')}>Log in</button>
+              <button type="button" className={CTA_SIGNUP} onClick={() => onRequestAuth('signup')}>Sign up</button>
+            </div>
+          )}
         </header>
         <section className="conversation" aria-live="polite" ref={conversationRef}>
           {messagesLoading
@@ -311,42 +553,126 @@ function App({ user, onSignOut, onProfileChange }) {
             : messagesError
               ? <div className="conversation-status conversation-error">{messagesError}<button type="button" onClick={() => loadMessages(activeId)}>Try again</button></div>
               : messages.length
-                ? messages.map((message) => <Message key={message.id} message={message} />)
-                : <EmptyState onPrompt={(prompt) => setText(prompt)} />}
+                ? messages.map((message) => (
+                  <Message
+                    key={message.id} message={message} editing={editingId === message.id} canEdit={!isRecording}
+                    onCopy={copyWithToast} onStartEdit={setEditingId} onCancelEdit={() => setEditingId(null)} onSubmitEdit={submitEdit}
+                  />
+                ))
+                : <EmptyState greeting={greeting} onPrompt={(prompt) => setText(prompt)} />}
           {pending && pending.chatId === activeId && <Thinking />}
         </section>
         <div className="composer-wrap">
-          {isRecording && <VoiceBar stream={recordingStream} onCancel={() => finishRecording(false)} onConfirm={() => finishRecording(true)} />}
+          {limitReached && (
+            <div className="guest-banner" role="alert">
+              <span>Sign up or Log in to continue chatting with TranslyAi</span>
+              <div><button type="button" onClick={() => onRequestAuth('login')}>Log in</button><button type="button" className="primary" onClick={() => onRequestAuth('signup')}>Sign up</button></div>
+            </div>
+          )}
+          {isRecording && <VoiceBar stream={recordingStream} transcribing={isTranscribing} onCancel={cancelVoice} onConfirm={confirmVoice} />}
           <form className="composer" onSubmit={submitText} hidden={isRecording}>
             {audioFile && <div className="attachment-chip"><Paperclip size={13} />{shortenFileName(audioFile.name)}<button type="button" onClick={() => setAudioFile(null)} aria-label="Remove attachment"><X size={13} /></button></div>}
             <textarea
-              ref={textareaRef} value={text} rows={1} placeholder="Message LinguaAI..." aria-label="Message"
+              ref={textareaRef} value={text} rows={1} disabled={limitReached} placeholder={limitReached ? 'Sign up or log in to continue chatting' : 'Message TranslyAi...'} aria-label="Message"
               onChange={(event) => { setText(event.target.value); resizeTextarea(event.target); }}
               onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submitText(event); } }}
             />
             <div className="composer-controls">
               <div className="composer-tools">
                 <input ref={fileInputRef} type="file" accept="audio/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) { setAudioFile(file); setError(''); } event.target.value = ''; }} hidden />
-                <button type="button" className="tool-button" onClick={() => fileInputRef.current?.click()} aria-label="Attach audio"><Paperclip size={18} /></button>
-                <button type="button" className="tool-button" onClick={startRecording} aria-label="Record audio"><Mic size={18} /></button>
-                <label className="language-select"><Languages size={14} /><select value={sourceLanguage} onChange={(event) => setSourceLanguage(event.target.value)} aria-label="Source language">{languages.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><ChevronDown size={13} /></label>
+                <button type="button" className="tool-button" onClick={() => fileInputRef.current?.click()} disabled={limitReached} aria-label="Attach audio"><Paperclip size={18} /></button>
+                <button type="button" className="tool-button" onClick={startRecording} disabled={limitReached} aria-label="Record audio"><Mic size={18} /></button>
               </div>
-              <button type="submit" className="send-button" disabled={busy || (!text.trim() && !audioFile)} aria-label="Send message">{busy ? <LoaderCircle size={18} className="spin" /> : <ArrowUp size={18} />}</button>
+              {/* The keys make React swap the two buttons instead of reusing one node, otherwise the Stop click would also submit the form as the node turns into the Send button. */}
+              {isLoading
+                ? <button key="stop" type="button" className="stop-button" onClick={stopGeneration} aria-label="Stop generating" title="Stop generating"><span className="stop-square" /></button>
+                : <button key="send" type="submit" className="send-button" disabled={busy || limitReached || (!text.trim() && !audioFile)} aria-label="Send message">{isSaving ? <LoaderCircle size={18} className="spin" /> : <ArrowUp size={18} />}</button>}
             </div>
           </form>
-          {error && <div className="error-line"><X size={14} />{error}</div>}
-          <p className="composer-note">LinguaAI can make mistakes. Check important translations.</p>
+          {error && <div className="error-line" role="alert"><span>{error}</span><button type="button" onClick={() => setError('')} aria-label="Dismiss message"><X size={14} /></button></div>}
+          <p className="composer-note">{guest && !limitReached ? `Guest mode: ${freeLeft} free ${freeLeft === 1 ? 'message' : 'messages'} left. ` : ''}TranslyAi can make mistakes. Check important translations.</p>
         </div>
       </main>
+      {shareOpen && activeChat && <ShareModal chat={activeChat} messages={messages} onClose={() => setShareOpen(false)} onCopied={() => showToast('Link copied')} onError={() => setError("Couldn't copy the link. Please copy it from the address bar.")} />}
+      {toast && <div className="toast" role="status">{toast}</div>}
+      {deleteTarget && <DeleteModal chat={deleteTarget} onCancel={() => setDeleteTarget(null)} onConfirm={() => { const chat = deleteTarget; setDeleteTarget(null); removeChat(chat); }} />}
+      {guest && authPromptOpen && <AuthPrompt limitReached={limitReached} onClose={() => setAuthPromptOpen(false)} onRequestAuth={onRequestAuth} />}
     </div>
   );
 }
 
-function Message({ message }) {
-  if (message.role === 'user') return <div className="message-row user-row"><div className="user-bubble">{message.audioName && <span className="audio-badge"><Paperclip size={13} />{shortenFileName(message.audioName)}</span>}{!message.audioName && message.content}</div></div>;
+// Shown when a guest has used their free messages: a clear route to sign up or log in.
+function AuthPrompt({ limitReached, onClose, onRequestAuth }) {
+  useEffect(() => {
+    const onKeyDown = (event) => { if (event.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onClose]);
+  return (
+    <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <div className="modal auth-prompt" role="dialog" aria-modal="true" aria-labelledby="auth-prompt-title">
+        <div className="auth-prompt-icon"><span className="t-glyph t-large">T</span></div>
+        <h2 id="auth-prompt-title">{limitReached ? "You've used your free messages" : 'Sign up to keep going'}</h2>
+        <p>Sign up or Log in to continue chatting with TranslyAi. It only takes a moment, and your chats will be saved.</p>
+        <div className="auth-prompt-actions">
+          <button type="button" className="primary" onClick={() => onRequestAuth('signup')}>Sign up</button>
+          <button type="button" onClick={() => onRequestAuth('login')}>Log in</button>
+        </div>
+        <button type="button" className="auth-prompt-close" onClick={onClose}>Maybe later</button>
+      </div>
+    </div>
+  );
+}
+
+function EditBox({ initial, onCancel, onSubmit }) {
+  const [value, setValue] = useState(initial);
+  const boxRef = useRef(null);
+  useEffect(() => {
+    const box = boxRef.current;
+    box.focus();
+    box.setSelectionRange(box.value.length, box.value.length);
+  }, []);
+  useEffect(() => { if (boxRef.current) resizeTextarea(boxRef.current); }, [value]);
+  const send = () => { if (value.trim()) onSubmit(value); };
+  return (
+    <div className="edit-box">
+      <textarea
+        ref={boxRef} value={value} rows={1} aria-label="Edit your message"
+        onChange={(event) => setValue(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') { event.preventDefault(); onCancel(); }
+          else if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); send(); }
+        }}
+      />
+      <div className="edit-actions">
+        <button type="button" className="cancel" onClick={onCancel}>Cancel</button>
+        <button type="button" className="send" onClick={send} disabled={!value.trim()}>Send</button>
+      </div>
+    </div>
+  );
+}
+
+function Message({ message, editing, canEdit, onCopy, onStartEdit, onCancelEdit, onSubmitEdit }) {
+  if (message.role === 'user') {
+    return (
+      <div className="message-row user-row">
+        <div className={`user-message ${editing ? 'is-editing' : ''}`}>
+          {editing
+            ? <EditBox initial={message.content} onCancel={onCancelEdit} onSubmit={(value) => onSubmitEdit(message, value)} />
+            : <div className="user-bubble">{message.audioName && !message.content && <span className="audio-badge"><Paperclip size={13} />{shortenFileName(message.audioName)}</span>}{message.content}</div>}
+          {!editing && message.content && (
+            <div className="user-actions">
+              <button type="button" aria-label="Copy message" title="Copy" onClick={() => onCopy(message.content)}><Copy size={14} /></button>
+              <button type="button" aria-label="Edit message" title="Edit" disabled={!canEdit} onClick={() => onStartEdit(message.id)}><Pencil size={14} /></button>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
   const { result } = message;
   if (!result) return null;
-  return <div className="message-row assistant-row"><div className="avatar assistant-avatar"><Sparkles size={15} /></div><div className="assistant-content"><div className="assistant-label">LinguaAI</div><div className="translation-card"><div className="result-heading"><span>English translation</span><button type="button" className="mini-action" aria-label="Copy translation" onClick={() => navigator.clipboard?.writeText(result.english_translation)}><Copy size={14} /></button></div>{paragraphs(result.english_translation).map((paragraph, index) => <p key={index}>{paragraph}</p>)}</div><div className="summary-card"><div className="summary-heading"><Sparkles size={14} />Claude summary</div><SummaryText text={result.summary} /></div><div className="message-actions"><button type="button" aria-label="Read translation aloud"><Volume2 size={14} /></button><button type="button" aria-label="Copy response" onClick={() => navigator.clipboard?.writeText(`${result.english_translation}\n\n${result.summary.replace(/\*\*/g, '')}`)}><Copy size={14} /></button></div></div></div>;
+  return <div className="message-row assistant-row"><div className="avatar assistant-avatar"><span className="t-glyph">T</span></div><div className="assistant-content"><div className="assistant-label">TranslyAi</div><div className="translation-card"><div className="result-heading"><span>English translation</span><button type="button" className="mini-action" aria-label="Copy translation" onClick={() => onCopy(result.english_translation, 'Translation copied')}><Copy size={14} /></button></div>{paragraphs(result.english_translation).map((paragraph, index) => <p key={index}>{paragraph}</p>)}</div><div className="summary-card"><div className="summary-heading"><Sparkles size={14} />TranslyAi summary</div><SummaryText text={result.summary} /></div><div className="message-actions">{/* Text-to-speech is hidden for now: <button type="button" aria-label="Read translation aloud"><Volume2 size={14} /></button> */}<button type="button" aria-label="Copy response" onClick={() => onCopy(`${result.english_translation}\n\n${result.summary.replace(/\*\*/g, '')}`)}><Copy size={14} /></button></div></div></div>;
 }
 
 const paragraphs = (text) => String(text || '').split(/\n{2,}/).map((part) => part.trim()).filter(Boolean);
@@ -368,16 +694,11 @@ function SummaryText({ text }) {
 }
 
 function Thinking() {
-  return <div className="message-row assistant-row thinking-row" role="status"><div className="avatar assistant-avatar"><Sparkles size={15} /></div><div className="typing-dots" aria-label="LinguaAI is responding"><span /><span /><span /></div></div>;
+  return <div className="message-row assistant-row thinking-row" role="status"><div className="avatar assistant-avatar"><span className="t-glyph">T</span></div><div className="typing-dots" aria-label="TranslyAi is responding"><span /><span /><span /></div></div>;
 }
 
-function EmptyState({ onPrompt }) {
-  return <div className="empty-state"><div className="empty-icon"><Languages size={24} /></div><h1>Where should we start?</h1><p>Translate text or voice into clear English, then get a concise summary.</p><div className="prompt-suggestions">{['Translate a meeting note', 'Summarize my voice memo', 'Help me understand this'].map((prompt) => <button key={prompt} type="button" onClick={() => onPrompt(prompt)}>{prompt}<ArrowUp size={14} /></button>)}</div></div>;
-}
-
-function isNetworkOrTimeoutError(err) {
-  if (err instanceof TypeError) return true; // fetch rejects with TypeError on network failure
-  return ['ECONNABORTED', 'ETIMEDOUT', 'ERR_NETWORK'].includes(err?.code) || Boolean(err?.request && !err?.response);
+function EmptyState({ greeting, onPrompt }) {
+  return <div className="empty-state"><h1>{greeting.heading}</h1><p className="empty-tagline">{greeting.tagline}</p><div className="prompt-suggestions">{['Translate a meeting note', 'Summarize my voice memo', 'Help me understand this'].map((prompt) => <button key={prompt} type="button" onClick={() => onPrompt(prompt)}>{prompt}<ArrowUp size={14} /></button>)}</div></div>;
 }
 function shortenFileName(name, max = 22) {
   if (name.length <= max) return name;
@@ -390,6 +711,7 @@ function makeTitle(text) {
   const words = (text || '').replace(/[^\p{L}\p{N}\s'’-]/gu, ' ').split(/\s+/).map((word) => word.replace(/^[-'’]+|[-'’]+$/g, '')).filter(Boolean);
   return words.slice(0, 5).join(' ') || 'New chat';
 }
+function hasNonLatinScript(text) { return /[^\p{Script=Latin}\p{Script=Common}\p{Script=Inherited}]/u.test(text); }
 function resizeTextarea(textarea) { textarea.style.height = 'auto'; textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`; textarea.style.overflowY = textarea.scrollHeight > 200 ? 'auto' : 'hidden'; }
 
 export default App;

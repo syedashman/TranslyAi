@@ -1,1 +1,1 @@
-"""AI Translator backend package."""
+"""TranslyAi backend package."""

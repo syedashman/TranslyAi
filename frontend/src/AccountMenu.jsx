@@ -168,7 +168,7 @@ function SettingsModal({ onClose, onSignOut }) {
       </section>
       <section className="settings-section">
         <h3>About</h3>
-        <div className="about-row"><span>LinguaAI version</span><strong>{pkg.version}</strong></div>
+        <div className="about-row"><span>TranslyAi version</span><strong>{pkg.version}</strong></div>
       </section>
       <section className="settings-section">
         <h3>Account</h3>

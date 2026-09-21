@@ -1,29 +1,21 @@
 import axios from 'axios';
 import { API_BASE_URL } from './config';
 import { supabase } from './supabase';
+import { describeError, MESSAGES } from './errors';
 
 // The free backend can take a while to wake up, so the first calls get a long timeout.
 const DEFAULT_TIMEOUT_MS = 30000;
 const LIST_TIMEOUT_MS = 60000;
 
-function friendlyError(error) {
-  if (error?.response?.data?.detail && typeof error.response.data.detail === 'string') return error.response.data.detail;
-  if (error?.response?.status === 422) return 'That request was not valid.';
-  if (error?.code === 'ECONNABORTED' || error?.code === 'ETIMEDOUT' || error?.code === 'ERR_NETWORK' || (error?.request && !error?.response)) {
-    return 'Connection timed out. Please try again';
-  }
-  return error?.message || 'Something went wrong. Please try again.';
-}
-
 async function call(method, path, { data, params, timeout = DEFAULT_TIMEOUT_MS } = {}) {
   const { data: sessionData } = await supabase.auth.getSession();
   const token = sessionData.session?.access_token;
-  if (!token) throw new Error('Your session has expired. Please log in again.');
+  if (!token) throw new Error(MESSAGES.session);
   try {
     const response = await axios({ method, url: `${API_BASE_URL}/api${path}`, data, params, timeout, headers: { Authorization: `Bearer ${token}` } });
     return response.data;
   } catch (error) {
-    throw new Error(friendlyError(error));
+    throw new Error(describeError(error));
   }
 }
 
@@ -34,6 +26,7 @@ export const setArchived = (chatId, value) => call('patch', `/chats/${chatId}/ar
 export const deleteChat = (chatId) => call('delete', `/chats/${chatId}`);
 export const fetchMessages = (chatId) => call('get', `/chats/${chatId}/messages`);
 export const saveMessages = (chatId, messages) => call('post', `/chats/${chatId}/messages`, { data: { messages } });
+export const deleteMessages = (chatId, messageIds) => call('post', `/chats/${chatId}/messages/delete`, { data: { message_ids: messageIds } });
 export const generateTitle = (chatId, text) => call('post', `/chats/${chatId}/title`, { data: { text: text.slice(0, 2000) }, timeout: 60000 });
 
 export const toUiMessage = (row) => ({

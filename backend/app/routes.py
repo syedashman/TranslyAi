@@ -8,15 +8,18 @@ from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Respo
 from app.schemas import (
     ChatCreateRequest,
     ChatOut,
+    DeleteMessagesRequest,
     MessageOut,
     SaveMessagesRequest,
     TitleRequest,
     ToggleRequest,
+    TranscriptionResponse,
     TranslationRequest,
     TranslationResponse,
 )
 from app.services.chat_store import ChatStore, ChatStoreError
 from app.services.language import LanguageService
+from app.services.romanizer import to_roman_script
 from app.services.speech import SpeechService
 from app.services.summarizer import SummarizerService
 from app.services.titler import TitleService
@@ -38,8 +41,8 @@ async def translate_endpoint(request: TranslationRequest):
             )
 
         translated_text, translated = await asyncio.wait_for(
-            asyncio.to_thread(TranslationService.translate_with_status, request.text),
-            timeout=15.0,
+            asyncio.to_thread(TranslationService.translate_with_status, request.text, request.from_speech),
+            timeout=70.0,  # long dictated messages need more than a few seconds
         )
     except Exception as exc:
         print(f"TRANSLATE ENDPOINT ERROR: {exc}")
@@ -51,7 +54,7 @@ async def translate_endpoint(request: TranslationRequest):
         try:
             summary = await asyncio.wait_for(
                 asyncio.to_thread(SummarizerService.summarize, translated_text),
-                timeout=15.0,
+                timeout=45.0,
             )
         except Exception as exc:
             print(f"SUMMARY ENDPOINT ERROR: {exc}")
@@ -64,6 +67,45 @@ async def translate_endpoint(request: TranslationRequest):
         "english_translation": translated_text.strip(),
         "summary": summary.strip(),
     }
+
+
+@router.post("/transcribe", response_model=TranscriptionResponse)
+async def transcribe_only(
+    file: UploadFile = File(...),
+    source_language: str | None = Form(default=None),
+):
+    """Speech-to-text only: returns the raw transcript so the client can show it for review before translating."""
+    gc.collect()
+    audio_path = None
+    try:
+        if not file.filename:
+            raise ValueError("No audio file uploaded.")
+
+        audio_path = await SpeechService.save_upload(file)
+        text = await SpeechService.transcribe_file(audio_path, language=LanguageService.normalize_code(source_language))
+        text = text.strip()
+        try:
+            # Whisper sometimes answers in Devanagari or Urdu script; the preview must be Roman Urdu / English.
+            text = (await asyncio.wait_for(asyncio.to_thread(to_roman_script, text), timeout=45.0)).strip()
+        except Exception as exc:
+            print(f"TRANSCRIBE ROMANIZE ERROR: {exc}")
+        return {"text": text}
+    except ValueError as exc:
+        print(f"TRANSCRIBE ENDPOINT VALUE ERROR: {exc}")
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        print(f"TRANSCRIBE ENDPOINT RUNTIME ERROR: {exc}")
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        print(f"TRANSCRIBE ENDPOINT ERROR: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        try:
+            SpeechService.discard(audio_path)
+            await file.close()
+        except Exception as cleanup_error:
+            print(f"TRANSCRIBE ENDPOINT CLEANUP ERROR: {cleanup_error}")
+        gc.collect()
 
 
 @router.post("/audio", response_model=TranslationResponse)
@@ -177,6 +219,19 @@ async def get_messages(chat_id: UUID, token: str = Depends(bearer_token)):
 async def save_messages(chat_id: UUID, body: SaveMessagesRequest, token: str = Depends(bearer_token)):
     messages = [message.model_dump() for message in body.messages]
     return await store_call(ChatStore.add_messages(token, chat_id, messages))
+
+
+@router.post("/chats/{chat_id}/messages/delete")
+async def delete_messages(chat_id: UUID, body: DeleteMessagesRequest, token: str = Depends(bearer_token)):
+    """Removes messages from a chat; used when an edited prompt replaces the exchange that followed it."""
+    require_found(await store_call(ChatStore.get_chat(token, chat_id)))
+    deleted = await store_call(ChatStore.delete_messages(token, chat_id, body.message_ids))
+    if deleted == 0:
+        raise HTTPException(
+            status_code=403,
+            detail="The database did not remove those messages. Run supabase/chats.sql in the Supabase SQL Editor to fix the table rules.",
+        )
+    return {"deleted": deleted}
 
 
 @router.post("/chats/{chat_id}/title", response_model=ChatOut)
