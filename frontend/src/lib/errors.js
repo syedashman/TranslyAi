@@ -38,9 +38,10 @@ export function describeError(error, fallback = MESSAGES.generic) {
   if (status === 429 || QUOTA.test(message)) return MESSAGES.busy;
   if (DB_SETUP.test(message) && /chat|table|supabase|column/i.test(message)) return MESSAGES.databaseSetup;
   if (DB.test(message) || (status === 503 && /chat|storage/i.test(message))) return MESSAGES.database;
+  if (status >= 500 && status !== 504 && STT.test(message)) return MESSAGES.transcription;
   if (status === 504 || status === 408) return MESSAGES.timeout;
   if (status === 502 || status === 503) return `${MESSAGES.unavailable} (HTTP ${status})`;
-  if (status >= 500) return STT.test(message) ? MESSAGES.transcription : `${MESSAGES.server} (HTTP ${status})`;
+  if (status >= 500) return `${MESSAGES.server} (HTTP ${status})`;
   if (status === 413) return 'That file is too large. Please use a smaller audio clip (25 MB maximum).';
   if (status === 422) return 'That request was not valid. Please check your input and try again.';
   return detail && detail.length <= 160 ? detail : fallback;

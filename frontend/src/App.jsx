@@ -567,35 +567,38 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
                 : <EmptyState greeting={greeting} onPrompt={(prompt) => setText(prompt)} />}
           {pending && pending.chatId === activeId && <Thinking />}
         </section>
-        <div className="composer-wrap">
-          {limitReached && (
-            <div className="guest-banner" role="alert">
-              <span>Sign up or Log in to continue chatting with TranslyAi</span>
-              <div><button type="button" onClick={() => onRequestAuth('login')}>Log in</button><button type="button" className="primary" onClick={() => onRequestAuth('signup')}>Sign up</button></div>
-            </div>
-          )}
-          {isRecording && <VoiceBar stream={recordingStream} transcribing={isTranscribing} onCancel={cancelVoice} onConfirm={confirmVoice} />}
-          <form className="composer" onSubmit={submitText} hidden={isRecording}>
-            {audioFile && <div className="attachment-chip"><Paperclip size={13} />{shortenFileName(audioFile.name)}<button type="button" onClick={() => setAudioFile(null)} aria-label="Remove attachment"><X size={13} /></button></div>}
-            <textarea
-              ref={textareaRef} value={text} rows={1} disabled={limitReached} placeholder={limitReached ? 'Sign up or log in to continue chatting' : 'Message TranslyAi...'} aria-label="Message"
-              onChange={(event) => { setText(event.target.value); resizeTextarea(event.target); }}
-              onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submitText(event); } }}
-            />
-            <div className="composer-controls">
-              <div className="composer-tools">
-                <input ref={fileInputRef} type="file" accept="audio/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) { setAudioFile(file); setError(''); } event.target.value = ''; }} hidden />
-                <button type="button" className="tool-button" onClick={() => fileInputRef.current?.click()} disabled={limitReached} aria-label="Attach audio"><Paperclip size={18} /></button>
-                <button type="button" className="tool-button" onClick={startRecording} disabled={limitReached} aria-label="Record audio"><Mic size={18} /></button>
+        <div className="composer-wrap flex w-full flex-col items-center justify-center">
+          {/* One centred, responsive column holds the bar, banners and the disclaimer. */}
+          <div className="relative mx-auto w-full max-w-3xl px-4">
+            {limitReached && (
+              <div className="guest-banner" role="alert">
+                <span>Sign up or Log in to continue chatting with TranslyAi</span>
+                <div><button type="button" onClick={() => onRequestAuth('login')}>Log in</button><button type="button" className="primary" onClick={() => onRequestAuth('signup')}>Sign up</button></div>
               </div>
-              {/* The keys make React swap the two buttons instead of reusing one node, otherwise the Stop click would also submit the form as the node turns into the Send button. */}
-              {isLoading
-                ? <button key="stop" type="button" className="stop-button" onClick={stopGeneration} aria-label="Stop generating" title="Stop generating"><span className="stop-square" /></button>
-                : <button key="send" type="submit" className="send-button" disabled={busy || limitReached || (!text.trim() && !audioFile)} aria-label="Send message">{isSaving ? <LoaderCircle size={18} className="spin" /> : <ArrowUp size={18} />}</button>}
-            </div>
-          </form>
-          {error && <div className="error-line error-toast" role="alert"><CircleAlert size={18} className="error-icon" /><span>{error}</span><button type="button" onClick={() => setError('')} aria-label="Dismiss message"><X size={14} /></button></div>}
-          <p className="composer-note">{guest && !limitReached ? `Guest mode: ${freeLeft} free ${freeLeft === 1 ? 'message' : 'messages'} left. ` : ''}TranslyAi can make mistakes. Check important translations.</p>
+            )}
+            {isRecording && <VoiceBar stream={recordingStream} transcribing={isTranscribing} onCancel={cancelVoice} onConfirm={confirmVoice} />}
+            <form className="composer" onSubmit={submitText} hidden={isRecording}>
+              {audioFile && <div className="attachment-chip"><Paperclip size={13} />{shortenFileName(audioFile.name)}<button type="button" onClick={() => setAudioFile(null)} aria-label="Remove attachment"><X size={13} /></button></div>}
+              <textarea
+                ref={textareaRef} value={text} rows={1} disabled={limitReached} placeholder={limitReached ? 'Sign up or log in to continue chatting' : 'Message TranslyAi...'} aria-label="Message"
+                onChange={(event) => { setText(event.target.value); resizeTextarea(event.target); }}
+                onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submitText(event); } }}
+              />
+              <div className="composer-controls">
+                <div className="composer-tools">
+                  <input ref={fileInputRef} type="file" accept="audio/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) { setAudioFile(file); setError(''); } event.target.value = ''; }} hidden />
+                  <button type="button" className="tool-button" onClick={() => fileInputRef.current?.click()} disabled={limitReached} aria-label="Attach audio"><Paperclip size={18} /></button>
+                  <button type="button" className="tool-button" onClick={startRecording} disabled={limitReached} aria-label="Record audio"><Mic size={18} /></button>
+                </div>
+                {/* The keys make React swap the two buttons instead of reusing one node, otherwise the Stop click would also submit the form as the node turns into the Send button. */}
+                {isLoading
+                  ? <button key="stop" type="button" className="stop-button" onClick={stopGeneration} aria-label="Stop generating" title="Stop generating"><span className="stop-square" /></button>
+                  : <button key="send" type="submit" className="send-button" disabled={busy || limitReached || (!text.trim() && !audioFile)} aria-label="Send message">{isSaving ? <LoaderCircle size={18} className="spin" /> : <ArrowUp size={18} />}</button>}
+              </div>
+            </form>
+            {error && <div className="error-line error-toast" role="alert"><CircleAlert size={18} className="error-icon" /><span>{error}</span><button type="button" onClick={() => setError('')} aria-label="Dismiss message"><X size={14} /></button></div>}
+            <p className="composer-note mx-auto w-full text-center">{guest && !limitReached ? `Guest mode: ${freeLeft} free ${freeLeft === 1 ? 'message' : 'messages'} left. ` : ''}TranslyAi can make mistakes. Check important translations.</p>
+          </div>
         </div>
       </main>
       {shareOpen && activeChat && <ShareModal chat={activeChat} messages={messages} onClose={() => setShareOpen(false)} onCopied={() => showToast('Link copied')} onError={() => setError("Couldn't copy the link. Please copy it from the address bar.")} />}
