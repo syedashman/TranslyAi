@@ -18,17 +18,18 @@ async def translate_and_summarize(
     if not text and not audio_path:
         raise ValueError("Either text or audio input is required.")
 
-    if audio_path:
-        text = await SpeechService.transcribe_file(audio_path)
-
     normalized_source = LanguageService.normalize_code(source_language)
+
+    if audio_path:
+        text = await SpeechService.transcribe_file(audio_path, language=normalized_source)
+
     detected_language = normalized_source or LanguageService.detect(text)
 
     if detected_language is None:
         raise ValueError("Unable to detect the input language automatically.")
 
     english_translation, translated = await asyncio.to_thread(
-        TranslationService.translate_with_status, text
+        TranslationService.translate_with_status, text, bool(audio_path)
     )
     if translated:
         summary = await asyncio.to_thread(SummarizerService.summarize, english_translation)

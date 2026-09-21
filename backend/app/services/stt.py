@@ -9,6 +9,12 @@ from app.config import settings
 load_dotenv(find_dotenv(), override=True)
 
 
+WHISPER_PROMPT = (
+    "Transcribe exact spoken Urdu, Roman Urdu, Hinglish, or English audio phonetically. "
+    "Do not add or guess words that were not spoken."
+)
+
+
 class STTService:
     _client: Optional[Groq] = None
 
@@ -28,8 +34,11 @@ class STTService:
         return cls._client
 
     @classmethod
-    async def transcribe(cls, file_path: str) -> str:
+    async def transcribe(cls, file_path: str, language: Optional[str] = None) -> str:
         client = cls._get_client()
+
+        # Without an explicit choice the language is left out so Whisper auto-detects it per recording.
+        options = {"language": language} if language else {}
 
         try:
             # Pass the open handle (not bytes/path) so the SDK streams it instead of loading it into RAM.
@@ -37,11 +46,10 @@ class STTService:
                 transcription = client.audio.transcriptions.create(
                     file=(os.path.basename(file_path), file),
                     model="whisper-large-v3-turbo",
-                    prompt=(
-                        "Transcribe the audio in English or Roman Urdu script only. "
-                        "Do NOT output Devanagari or Hindi characters."
-                    ),
+                    prompt=WHISPER_PROMPT,
                     response_format="text",
+                    temperature=0.0,
+                    **options,
                 )
             return str(transcription)
         except Exception as error:

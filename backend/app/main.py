@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.routes import router
+from app.services.chat_store import ChatStore
 
 logger = logging.getLogger("ai-translator")
 logging.basicConfig(level=logging.INFO)
@@ -27,6 +28,7 @@ async def lifespan(app: FastAPI):
     gc.collect()
     _log_memory_usage("startup")
     yield
+    await ChatStore.close()
 
 
 app = FastAPI(

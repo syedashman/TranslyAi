@@ -44,5 +44,5 @@ class SpeechService:
             pass
 
     @classmethod
-    async def transcribe_file(cls, audio_path: str) -> str:
-        return await STTService.transcribe(audio_path)
+    async def transcribe_file(cls, audio_path: str, language: Optional[str] = None) -> str:
+        return await STTService.transcribe(audio_path, language=language)

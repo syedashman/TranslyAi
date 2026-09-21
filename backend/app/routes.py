@@ -1,12 +1,25 @@
 import asyncio
 import gc
+from typing import Awaitable, Literal, Optional, TypeVar
+from uuid import UUID
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Response, UploadFile
 
-from app.schemas import TranslationRequest, TranslationResponse
+from app.schemas import (
+    ChatCreateRequest,
+    ChatOut,
+    MessageOut,
+    SaveMessagesRequest,
+    TitleRequest,
+    ToggleRequest,
+    TranslationRequest,
+    TranslationResponse,
+)
+from app.services.chat_store import ChatStore, ChatStoreError
 from app.services.language import LanguageService
 from app.services.speech import SpeechService
 from app.services.summarizer import SummarizerService
+from app.services.titler import TitleService
 from app.services.translation import TranslationService
 from app.services.translator import translate_and_summarize
 
@@ -87,3 +100,90 @@ async def transcribe_audio(
         except Exception as cleanup_error:
             print(f"AUDIO ENDPOINT CLEANUP ERROR: {cleanup_error}")
         gc.collect()
+
+
+# ---------------------------------------------------------------------------
+# Saved chats (ChatGPT-style). Every route needs the user's Supabase access token:
+#   Authorization: Bearer <token>
+# The token is forwarded to Supabase, whose row-level security limits each user to their own rows.
+# ---------------------------------------------------------------------------
+
+T = TypeVar("T")
+
+
+def bearer_token(authorization: Optional[str] = Header(default=None)) -> str:
+    scheme, _, token = (authorization or "").partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        raise HTTPException(status_code=401, detail="Please log in to use saved chats.")
+    return token.strip()
+
+
+async def store_call(call: Awaitable[T]) -> T:
+    try:
+        return await call
+    except ChatStoreError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.message) from error
+
+
+def require_found(row: Optional[T], message: str = "Chat not found.") -> T:
+    if row is None:
+        raise HTTPException(status_code=404, detail=message)
+    return row
+
+
+@router.get("/chats", response_model=list[ChatOut])
+async def list_chats(archived: Literal["true", "false", "all"] = "false", token: str = Depends(bearer_token)):
+    """Pinned chats first, then most recently updated. Use archived=all to get both active and archived."""
+    return await store_call(ChatStore.list_chats(token, archived))
+
+
+@router.post("/chats", response_model=ChatOut, status_code=201)
+async def create_chat(body: Optional[ChatCreateRequest] = None, token: str = Depends(bearer_token)):
+    title = body.title.strip() if body and body.title else None
+    return await store_call(ChatStore.create_chat(token, title))
+
+
+@router.patch("/chats/{chat_id}/pin", response_model=ChatOut)
+async def toggle_pin(chat_id: UUID, body: Optional[ToggleRequest] = None, token: str = Depends(bearer_token)):
+    """Flips is_pinned, or sets it explicitly when {"value": true|false} is sent."""
+    chat = require_found(await store_call(ChatStore.get_chat(token, chat_id)))
+    pinned = body.value if body and body.value is not None else not chat["is_pinned"]
+    return require_found(await store_call(ChatStore.update_chat(token, chat_id, {"is_pinned": pinned})))
+
+
+@router.patch("/chats/{chat_id}/archive", response_model=ChatOut)
+async def toggle_archive(chat_id: UUID, body: Optional[ToggleRequest] = None, token: str = Depends(bearer_token)):
+    """Flips is_archived (archiving also unpins), or sets it explicitly when {"value": true|false} is sent."""
+    chat = require_found(await store_call(ChatStore.get_chat(token, chat_id)))
+    archived = body.value if body and body.value is not None else not chat["is_archived"]
+    fields = {"is_archived": archived, **({"is_pinned": False} if archived else {})}
+    return require_found(await store_call(ChatStore.update_chat(token, chat_id, fields)))
+
+
+@router.delete("/chats/{chat_id}", status_code=204)
+async def delete_chat(chat_id: UUID, token: str = Depends(bearer_token)):
+    if not await store_call(ChatStore.delete_chat(token, chat_id)):
+        raise HTTPException(status_code=404, detail="Chat not found.")
+    return Response(status_code=204)
+
+
+@router.get("/chats/{chat_id}/messages", response_model=list[MessageOut])
+async def get_messages(chat_id: UUID, token: str = Depends(bearer_token)):
+    require_found(await store_call(ChatStore.get_chat(token, chat_id)))
+    return await store_call(ChatStore.list_messages(token, chat_id))
+
+
+@router.post("/chats/{chat_id}/messages", response_model=list[MessageOut], status_code=201)
+async def save_messages(chat_id: UUID, body: SaveMessagesRequest, token: str = Depends(bearer_token)):
+    messages = [message.model_dump() for message in body.messages]
+    return await store_call(ChatStore.add_messages(token, chat_id, messages))
+
+
+@router.post("/chats/{chat_id}/title", response_model=ChatOut)
+async def generate_chat_title(chat_id: UUID, body: TitleRequest, token: str = Depends(bearer_token)):
+    """Names a new chat with a 3-5 word Gemini title. A chat that already has a title is returned unchanged."""
+    chat = require_found(await store_call(ChatStore.get_chat(token, chat_id)))
+    if not TitleService.is_untitled(chat["title"]):
+        return chat
+    title = await asyncio.to_thread(TitleService.generate, body.text)
+    return require_found(await store_call(ChatStore.update_chat(token, chat_id, {"title": title})))

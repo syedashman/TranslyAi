@@ -4,19 +4,9 @@ import App from './App';
 import AuthPage from './AuthPage';
 import { supabase } from './lib/supabase';
 
-function saveProfile(user) {
-  const meta = user.user_metadata || {};
-  // The database trigger normally creates the profile; this upsert is a safety net.
-  return supabase.from('profiles').upsert({
-    id: user.id,
-    email: user.email,
-    full_name: meta.full_name || meta.name || null,
-    avatar_url: meta.avatar_url || meta.picture || null,
-  }, { onConflict: 'id' });
-}
-
 export default function AuthGate() {
   const [session, setSession] = useState(undefined);
+  const [profile, setProfile] = useState(null);
 
   useEffect(() => {
     if (!supabase) { setSession(null); return undefined; }
@@ -27,8 +17,20 @@ export default function AuthGate() {
 
   const userId = session?.user?.id;
   useEffect(() => {
-    if (!session?.user) return;
-    saveProfile(session.user).then(({ error }) => { if (error) console.warn('Profile sync skipped:', error.message); });
+    if (!session?.user) { setProfile(null); return undefined; }
+    const { id, email, user_metadata: meta = {} } = session.user;
+    let cancelled = false;
+    (async () => {
+      // The database trigger normally creates the row; ignoreDuplicates means edits made in the app are never overwritten.
+      await supabase.from('profiles').upsert(
+        { id, email, full_name: meta.full_name || meta.name || null, avatar_url: meta.avatar_url || meta.picture || null },
+        { onConflict: 'id', ignoreDuplicates: true },
+      );
+      const { data, error } = await supabase.from('profiles').select('full_name, avatar_url').eq('id', id).maybeSingle();
+      if (error) console.warn('Profile load skipped:', error.message);
+      else if (!cancelled && data) setProfile(data);
+    })();
+    return () => { cancelled = true; };
   }, [userId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (session === undefined) return <div className="auth-shell"><LoaderCircle size={26} className="spin" /></div>;
@@ -39,8 +41,13 @@ export default function AuthGate() {
   const account = {
     id: user.id,
     email: user.email,
-    name: meta.full_name || meta.name || user.email?.split('@')[0] || 'Account',
-    avatarUrl: meta.avatar_url || meta.picture || '',
+    name: profile?.full_name || meta.full_name || meta.name || user.email?.split('@')[0] || 'Account',
+    avatarUrl: profile?.avatar_url || meta.avatar_url || meta.picture || '',
   };
-  return <App key={account.id} user={account} onSignOut={() => supabase.auth.signOut()} />;
+  const updateProfile = ({ name, avatarUrl }) => setProfile((current) => ({
+    full_name: name ?? current?.full_name ?? null,
+    avatar_url: avatarUrl ?? current?.avatar_url ?? null,
+  }));
+
+  return <App key={account.id} user={account} onSignOut={() => supabase.auth.signOut()} onProfileChange={updateProfile} />;
 }

@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -13,3 +13,45 @@ class TranslationResponse(BaseModel):
     original_text: str
     english_translation: str
     summary: str
+
+
+class ChatOut(BaseModel):
+    id: str
+    title: str
+    is_pinned: bool
+    is_archived: bool
+    created_at: str
+    updated_at: str
+
+
+class ChatCreateRequest(BaseModel):
+    title: Optional[str] = Field(default=None, max_length=120)
+
+
+class ToggleRequest(BaseModel):
+    value: Optional[bool] = None
+
+
+class TitleRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=2000)
+
+
+class MessageIn(BaseModel):
+    role: Literal["user", "assistant"]
+    content: Optional[str] = Field(default=None, max_length=20000)
+    audio_name: Optional[str] = Field(default=None, max_length=255)
+    result: Optional[dict[str, Any]] = None
+
+
+class SaveMessagesRequest(BaseModel):
+    messages: list[MessageIn] = Field(..., min_length=1, max_length=20)
+
+
+class MessageOut(BaseModel):
+    id: str
+    chat_id: str
+    role: str
+    content: Optional[str] = None
+    audio_name: Optional[str] = None
+    result: Optional[dict[str, Any]] = None
+    created_at: str
