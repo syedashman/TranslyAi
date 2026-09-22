@@ -159,7 +159,12 @@ button, textarea, select { font: inherit; } button { cursor: pointer; }
 .composer textarea { max-height: 200px; overflow-y: hidden; }
 .composer-controls { align-items: flex-end; }
 @keyframes pulse { 0%, 100% { opacity: .35; transform: translateY(0); } 50% { opacity: 1; transform: translateY(-2px); } } @keyframes spin { to { transform: rotate(360deg); } }
-@media (max-width: 720px) { .sidebar { position: fixed; z-index: 40; top: 0; bottom: 0; left: -270px; transition: left .25s ease; box-shadow: 8px 0 30px rgba(0,0,0,.3); }.sidebar-open { left: 0; }.sidebar-close, .mobile-menu { display: grid; }.topbar { padding: 10px 14px; }.conversation { padding: 28px 14px 160px; }.composer-wrap { left: 0; padding: 16px 10px 12px; }.user-bubble { max-width: 88%; }.assistant-content { max-width: calc(100% - 42px); }.empty-state { min-height: 58vh; }.empty-state h1 { font-size: 22px; }.prompt-suggestions { max-width: 310px; } }
+/* The avatar column (29px + 13px gap) only ate into the LEFT side, so on mobile the reply's card started well
+   right of the row while still ending flush with the row's right edge - the same lopsided-spacing complaint as
+   the user bubble, just from the avatar this time instead of an oversized max-width. Hiding the avatar on mobile
+   (the "TranslyAi" label already says who's replying) lets the content use the full row, matching the container's
+   equal left/right padding on both sides - the same fix applied to .user-message just above. */
+@media (max-width: 720px) { .sidebar { position: fixed; z-index: 40; top: 0; bottom: 0; left: -270px; transition: left .25s ease; box-shadow: 8px 0 30px rgba(0,0,0,.3); }.sidebar-open { left: 0; }.sidebar-close, .mobile-menu { display: grid; }.topbar { padding: 10px 14px; }.conversation { padding: 28px 14px 160px; }.composer-wrap { left: 0; padding: 16px 10px 12px; }.assistant-row .avatar { display: none; }.assistant-content { max-width: 100%; }.empty-state { min-height: 58vh; }.empty-state h1 { font-size: 22px; }.prompt-suggestions { max-width: 310px; } }
 
 /* Auth pages */
 .auth-shell { display: grid; min-height: 100vh; padding: 20px 16px; place-items: center; color: var(--cececf1); background: var(--c212121); }
@@ -416,7 +421,10 @@ button, textarea, select { font: inherit; } button { cursor: pointer; }
 .edit-actions .send { border: 1px solid #f97316; color: #ffffff; background: #f97316; }
 .edit-actions .send:hover:not(:disabled) { background: #fb923c; }
 .edit-actions .send:disabled { cursor: not-allowed; opacity: .45; }
-@media (max-width: 720px) { .user-message { max-width: 88%; } }
+/* No avatar column on the user side (unlike .assistant-content), so on mobile the bubble can use the full row
+   width like the assistant's reply does - otherwise capping it well under 100% while it's right-aligned leaves an
+   unused gap on the left that the right side doesn't have, making the two sides look unevenly spaced. */
+@media (max-width: 720px) { .user-message { max-width: 100%; } }
 
 /* Toast */
 .toast { position: fixed; z-index: 300; bottom: 110px; left: 50%; padding: 9px 18px; border: 1px solid var(--border); border-radius: 999px; color: var(--text); background: var(--surface); box-shadow: 0 10px 30px rgba(0, 0, 0, .35); font-size: 14px; font-weight: 500; transform: translateX(-50%); animation: toast-in .2s ease-out; }
