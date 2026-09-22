@@ -12,6 +12,7 @@ from app.schemas import (
     DeleteMessagesRequest,
     MessageOut,
     SaveMessagesRequest,
+    SharedChatView,
     TitleRequest,
     ToggleRequest,
     TranscriptionResponse,
@@ -236,6 +237,19 @@ async def delete_chat(chat_id: UUID, token: str = Depends(bearer_token)):
 async def get_messages(chat_id: UUID, token: str = Depends(bearer_token)):
     require_found(await store_call(ChatStore.get_chat(token, chat_id)))
     return await store_call(ChatStore.list_messages(token, chat_id))
+
+
+@router.get("/chats/{chat_id}/shared", response_model=SharedChatView)
+async def get_shared_chat(chat_id: UUID):
+    """Public, login-free view of a chat its owner explicitly marked shared - for a share link opened by someone
+    with no account/session at all (e.g. an incognito visitor). No Authorization header is required or used.
+
+    Only ever returns a chat that is_shared = true (see ChatStore.get_shared_chat); anything else 404s exactly
+    like a private chat does for get_messages above, so this can't be used to probe which chat ids exist.
+    """
+    chat = require_found(await store_call(ChatStore.get_shared_chat(chat_id)))
+    messages = await store_call(ChatStore.list_shared_messages(chat_id))
+    return {"chat": chat, "messages": messages}
 
 
 @router.post("/chats/{chat_id}/messages", response_model=list[MessageOut], status_code=201)

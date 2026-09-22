@@ -146,6 +146,32 @@ class ChatStore:
         return await cls._request("GET", "/messages", token, params=params) or []
 
     @classmethod
+    async def get_shared_chat(cls, chat_id: UUID) -> Optional[dict]:
+        """Public, login-free read of ONE chat - only when its owner has explicitly flagged it is_shared = true.
+
+        Used for a share link opened by someone with no Supabase session at all (an incognito/guest visitor), so
+        there is no caller token to pass through. This uses the project's own anon key as the credential instead -
+        the same credential an unauthenticated browser would send - which the "Shared chats are readable by anyone
+        signed in" policy in supabase/chats.sql already permits for any is_shared row, independent of who's asking.
+        The is_shared filter here is explicit and redundant with that policy on purpose: this endpoint can never
+        return a private chat even if the RLS policy were ever misconfigured.
+        """
+        rows = await cls._request(
+            "GET", "/chats", settings.supabase_anon_key.strip(),
+            params={"select": "*", "id": f"eq.{chat_id}", "is_shared": "eq.true"},
+        )
+        return rows[0] if rows else None
+
+    @classmethod
+    async def list_shared_messages(cls, chat_id: UUID) -> list[dict]:
+        """Messages for a chat already confirmed shared by get_shared_chat - same anon-key, login-free read."""
+        params = {
+            "select": "id,chat_id,role,content,audio_name,result,created_at",
+            "chat_id": f"eq.{chat_id}", "order": "created_at.asc,seq.asc",
+        }
+        return await cls._request("GET", "/messages", settings.supabase_anon_key.strip(), params=params) or []
+
+    @classmethod
     async def add_messages(cls, token: str, chat_id: UUID, messages: list[dict]) -> list[dict]:
         user_id = user_id_from_token(token)
         rows = [

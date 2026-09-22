@@ -7,12 +7,18 @@ import { describeError, MESSAGES } from './errors';
 const DEFAULT_TIMEOUT_MS = 30000;
 const LIST_TIMEOUT_MS = 60000;
 
-async function call(method, path, { data, params, timeout = DEFAULT_TIMEOUT_MS } = {}) {
-  const { data: sessionData } = await supabase.auth.getSession();
-  const token = sessionData.session?.access_token;
-  if (!token) throw new Error(MESSAGES.session);
+// auth: false skips the Supabase session entirely - for the one public, login-free endpoint (fetchSharedChat),
+// which a guest with no session at all must still be able to call.
+async function call(method, path, { data, params, timeout = DEFAULT_TIMEOUT_MS, auth = true } = {}) {
+  let headers;
+  if (auth) {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData.session?.access_token;
+    if (!token) throw new Error(MESSAGES.session);
+    headers = { Authorization: `Bearer ${token}` };
+  }
   try {
-    const response = await axios({ method, url: `${API_BASE_URL}/api${path}`, data, params, timeout, headers: { Authorization: `Bearer ${token}` } });
+    const response = await axios({ method, url: `${API_BASE_URL}/api${path}`, data, params, timeout, headers });
     return response.data;
   } catch (error) {
     // .status lets callers tell "genuinely not found/not accessible" (404) apart from a transient failure,
@@ -30,6 +36,8 @@ export const setArchived = (chatId, value) => call('patch', `/chats/${chatId}/ar
 export const setShared = (chatId, value) => call('patch', `/chats/${chatId}/share`, { data: { value } });
 export const deleteChat = (chatId) => call('delete', `/chats/${chatId}`);
 export const fetchMessages = (chatId) => call('get', `/chats/${chatId}/messages`);
+// Public: works with no login at all (a chat's owner must have turned sharing on for this to return anything).
+export const fetchSharedChat = (chatId) => call('get', `/chats/${chatId}/shared`, { auth: false });
 export const saveMessages = (chatId, messages) => call('post', `/chats/${chatId}/messages`, { data: { messages } });
 export const deleteMessages = (chatId, messageIds) => call('post', `/chats/${chatId}/messages/delete`, { data: { message_ids: messageIds } });
 export const generateTitle = (chatId, text) => call('post', `/chats/${chatId}/title`, { data: { text: text.slice(0, 2000) }, timeout: 60000 });

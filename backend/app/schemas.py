@@ -67,3 +67,10 @@ class MessageOut(BaseModel):
     audio_name: Optional[str] = None
     result: Optional[dict[str, Any]] = None
     created_at: str
+
+
+class SharedChatView(BaseModel):
+    """Public, login-free response for a chat its owner has explicitly marked is_shared = true."""
+
+    chat: ChatOut
+    messages: list[MessageOut]

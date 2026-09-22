@@ -14,8 +14,8 @@ import { CTA_LOGIN, CTA_SIGNUP } from './lib/authCta';
 import { copyText } from './lib/clipboard';
 import { bumpGuestCount, getGuestCount, GUEST_LIMIT } from './lib/guest';
 import {
-  createChat, deleteChat, deleteMessages, fetchMessages, generateTitle, listChats, saveMessages, setArchived, setPinned,
-  setShared, sortChats, toApiMessage, toUiMessage,
+  createChat, deleteChat, deleteMessages, fetchMessages, fetchSharedChat, generateTitle, listChats, saveMessages,
+  setArchived, setPinned, setShared, sortChats, toApiMessage, toUiMessage,
 } from './lib/chatApi';
 
 const AUDIO_TIMEOUT_MS = 60000;
@@ -56,7 +56,14 @@ const pickGreeting = (previous) => {
 
 function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfileChange }) {
   const [chats, setChats] = useState([]);
-  const [initialChatId] = useState(() => (guest ? null : readChatIdFromUrl()));
+  // The URL is the source of truth for which chat to open, for guests too: a share link must work whether or not
+  // the visitor is signed in. (Previously this was forced to null for guests, which is why a shared link opened
+  // in an incognito window silently landed on a new/empty chat instead of ever asking the backend for anything.)
+  const [initialChatId] = useState(() => {
+    const id = readChatIdFromUrl();
+    console.log('[TranslyAI] URL chatId:', id);
+    return id;
+  });
   const [greeting, setGreeting] = useState(() => pickGreeting());
   const [guestCount, setGuestCount] = useState(getGuestCount);
   const [authPromptOpen, setAuthPromptOpen] = useState(false);
@@ -101,7 +108,8 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
   const activeChat = chats.find((chat) => chat.id === activeId) || null;
   // Set once chats have loaded and a chat is open that isn't in our own list - i.e. we're viewing someone else's
   // chat via its share link (loadMessages only succeeds for that case once it's owned by us or shared with us).
-  const isForeignChat = Boolean(!guest && activeId && !chatsLoading && !activeChat && !messagesLoading && !messagesError);
+  // Guests are included: their own chat list is always empty, so a shared chat they're viewing is always "foreign".
+  const isForeignChat = Boolean(activeId && !chatsLoading && !activeChat && !messagesLoading && !messagesError);
   const busy = isLoading || isSaving;
   const limitReached = guest && guestCount >= GUEST_LIMIT;
   const freeLeft = Math.max(0, GUEST_LIMIT - guestCount);
@@ -138,10 +146,11 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshChats]);
 
-  // Back/forward buttons move between the chats that were opened.
+  // Back/forward buttons move between the chats that were opened (own or shared; openChat/resetToNewChat are
+  // both guest-safe, so this no longer needs to skip guests - skipping it here was the same bug as initialChatId
+  // above, just for back/forward navigation instead of the first load).
   const popstateRef = useRef(() => {});
   popstateRef.current = () => {
-    if (guest) return;
     const id = readChatIdFromUrl();
     if (id === activeIdRef.current) return;
     if (id) openChat(id, 'none'); else resetToNewChat('none');
@@ -195,10 +204,30 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
     return () => window.removeEventListener('unhandledrejection', onRejection);
   }, []);
 
+  // Guests have no Supabase session at all, so the private, login-required fetchMessages() would fail before even
+  // reaching the network (chatApi.js's call() throws immediately when there's no token) - go straight to the
+  // public fetchSharedChat() instead. A signed-in visitor tries their own private, RLS-scoped fetch first (it
+  // already succeeds for both their own chats and anything shared with any signed-in user); only on a 404 - not
+  // theirs, and RLS didn't grant it - does it also try the public endpoint, in case it was shared with everyone.
+  const loadMessagesRows = async (chatId) => {
+    if (guest) {
+      console.log('[TranslyAI] Loading shared chat:', chatId);
+      return (await fetchSharedChat(chatId)).messages;
+    }
+    console.log('[TranslyAI] Loading messages for chat:', chatId);
+    try {
+      return await fetchMessages(chatId);
+    } catch (privateError) {
+      if (privateError.status !== 404) throw privateError;
+      console.log('[TranslyAI] Not ours - trying shared chat:', chatId);
+      return (await fetchSharedChat(chatId)).messages;
+    }
+  };
+
   const loadMessages = async (chatId) => {
     setMessagesLoading(true); setMessagesError('');
     try {
-      const rows = await fetchMessages(chatId);
+      const rows = await loadMessagesRows(chatId);
       if (activeIdRef.current === chatId) setMessages(rows.map(toUiMessage));
       // A chat that never got its title (for example the connection dropped) is named when it is opened.
       // A foreign (shared-with-us) chat isn't in chatsRef.current, so this naturally skips renaming someone
@@ -209,9 +238,9 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
       }
     } catch (loadError) {
       if (activeIdRef.current !== chatId) return;
-      // 404 = the backend couldn't find this chat for us at all (not ours, and not shared with us either):
-      // that's the one case worth bouncing to a new chat instead of a dead screen. Any other failure (network,
-      // 5xx, expired session) stays as a retryable inline error instead of masking itself as "chat not found".
+      // 404 (from either path above) = truly not found or not accessible to us at all: that's the one case worth
+      // bouncing to a new chat instead of a dead screen. Any other failure (network, 5xx, expired session) stays
+      // as a retryable inline error instead of masking itself as "chat not found".
       if (loadError.status === 404) { resetToNewChat('replace'); setError("We couldn't find that conversation, so a new chat was opened."); }
       else setMessagesError(loadError.message);
     } finally {
