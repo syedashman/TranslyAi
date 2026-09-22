@@ -9,6 +9,7 @@ create table if not exists public.chats (
   title        text not null default 'New chat',
   is_pinned    boolean not null default false,
   is_archived  boolean not null default false,
+  is_shared    boolean not null default false,
   created_at   timestamptz not null default now(),
   updated_at   timestamptz not null default now()
 );
@@ -16,6 +17,8 @@ create table if not exists public.chats (
 alter table public.chats add column if not exists title        text        not null default 'New chat';
 alter table public.chats add column if not exists is_pinned    boolean     not null default false;
 alter table public.chats add column if not exists is_archived  boolean     not null default false;
+-- Off by default: a chat is only readable by someone other than its owner once its owner explicitly turns this on.
+alter table public.chats add column if not exists is_shared    boolean     not null default false;
 alter table public.chats add column if not exists created_at   timestamptz not null default now();
 alter table public.chats add column if not exists updated_at   timestamptz not null default now();
 alter table public.chats alter column id          set default gen_random_uuid();
@@ -23,6 +26,7 @@ alter table public.chats alter column user_id     set default auth.uid();
 alter table public.chats alter column title       set default 'New chat';
 alter table public.chats alter column is_pinned   set default false;
 alter table public.chats alter column is_archived set default false;
+alter table public.chats alter column is_shared   set default false;
 alter table public.chats alter column created_at  set default now();
 alter table public.chats alter column updated_at  set default now();
 
@@ -82,6 +86,20 @@ create policy "Users add messages to own chats"
 create policy "Users delete their own messages"
   on public.messages for delete
   using (auth.uid() = user_id);
+
+-- ---------- narrow opt-in exception: a chat's owner can flag it is_shared = true so its share link works for ----------
+-- ---------- other signed-in users too. These only ever ADD read access to rows the owner explicitly flagged; ----------
+-- ---------- they never touch insert/update/delete, so only the owner can ever change or post into a chat.     ----------
+drop policy if exists "Shared chats are readable by anyone signed in"          on public.chats;
+drop policy if exists "Shared chat messages are readable by anyone signed in" on public.messages;
+
+create policy "Shared chats are readable by anyone signed in"
+  on public.chats for select
+  using (is_shared = true);
+
+create policy "Shared chat messages are readable by anyone signed in"
+  on public.messages for select
+  using (exists (select 1 from public.chats c where c.id = messages.chat_id and c.is_shared = true));
 
 -- ---------- move a chat to the top of "Recents" whenever a message is added ----------
 create or replace function public.touch_chat_on_message()

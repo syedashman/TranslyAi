@@ -196,6 +196,20 @@ async def toggle_archive(chat_id: UUID, body: Optional[ToggleRequest] = None, to
     return require_found(await store_call(ChatStore.update_chat(token, chat_id, fields)))
 
 
+@router.patch("/chats/{chat_id}/share", response_model=ChatOut)
+async def toggle_share(chat_id: UUID, body: Optional[ToggleRequest] = None, token: str = Depends(bearer_token)):
+    """Flips is_shared, or sets it explicitly when {"value": true|false} is sent.
+
+    Only the chat's owner can reach this row at all (ChatStore.get_chat/update_chat still go through the caller's
+    own token, and only the owner-only row-level security policy grants insert/update), so nobody but the owner can
+    ever turn sharing on or off for a chat. Once is_shared is true, a separate read-only policy
+    (supabase/chats.sql) lets other signed-in users open that one chat by its id.
+    """
+    chat = require_found(await store_call(ChatStore.get_chat(token, chat_id)))
+    shared = body.value if body and body.value is not None else not chat["is_shared"]
+    return require_found(await store_call(ChatStore.update_chat(token, chat_id, {"is_shared": shared})))
+
+
 @router.delete("/chats/{chat_id}", status_code=204)
 async def delete_chat(chat_id: UUID, token: str = Depends(bearer_token)):
     if not await store_call(ChatStore.delete_chat(token, chat_id)):

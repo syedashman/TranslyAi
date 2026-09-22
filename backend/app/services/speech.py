@@ -47,4 +47,5 @@ class SpeechService:
     async def transcribe_file(cls, audio_path: str, language: Optional[str] = None, roman: bool = False) -> str:
         if roman:
             return await STTService.transcribe_roman(audio_path, language=language)
-        return await STTService.transcribe(audio_path, language=language)
+        text, _provider = await STTService.transcribe(audio_path, language=language)
+        return text

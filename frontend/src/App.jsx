@@ -15,7 +15,7 @@ import { copyText } from './lib/clipboard';
 import { bumpGuestCount, getGuestCount, GUEST_LIMIT } from './lib/guest';
 import {
   createChat, deleteChat, deleteMessages, fetchMessages, generateTitle, listChats, saveMessages, setArchived, setPinned,
-  sortChats, toApiMessage, toUiMessage,
+  setShared, sortChats, toApiMessage, toUiMessage,
 } from './lib/chatApi';
 
 const AUDIO_TIMEOUT_MS = 60000;
@@ -99,6 +99,9 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
   const textareaRef = useRef(null);
   const conversationRef = useRef(null);
   const activeChat = chats.find((chat) => chat.id === activeId) || null;
+  // Set once chats have loaded and a chat is open that isn't in our own list - i.e. we're viewing someone else's
+  // chat via its share link (loadMessages only succeeds for that case once it's owned by us or shared with us).
+  const isForeignChat = Boolean(!guest && activeId && !chatsLoading && !activeChat && !messagesLoading && !messagesError);
   const busy = isLoading || isSaving;
   const limitReached = guest && guestCount >= GUEST_LIMIT;
   const freeLeft = Math.max(0, GUEST_LIMIT - guestCount);
@@ -116,26 +119,21 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
   const setActive = (id, urlMode = 'push') => { activeIdRef.current = id; setActiveIdState(id); writeChatIdToUrl(id, urlMode); };
   const patchChat = (id, changes) => setChats((current) => sortChats(current.map((chat) => (chat.id === id ? { ...chat, ...changes } : chat))));
 
-  const refreshChats = useCallback(async ({ validateActive = false } = {}) => {
+  const refreshChats = useCallback(async () => {
     if (guest) { setChatsLoading(false); return; } // guests have no saved chats
     setChatsLoading(true); setChatsError('');
-    try {
-      const list = sortChats(await listChats());
-      setChats(list);
-      // A link to a chat that no longer exists (or isn't yours) falls back to a new chat instead of an empty screen.
-      if (validateActive && activeIdRef.current && !list.some((chat) => chat.id === activeIdRef.current)) {
-        activeIdRef.current = null; setActiveIdState(null); writeChatIdToUrl(null, 'replace');
-        setMessages([]); setMessagesLoading(false); setMessagesError('');
-        setError("We couldn't find that conversation, so a new chat was opened.");
-      }
-    }
+    // listChats() only ever returns chats we own (see ChatStore.list_chats), never someone else's shared chat -
+    // so whether a URL chat id belongs to us or not is decided by loadMessages actually trying to load it below,
+    // not by whether it happens to be in this list.
+    try { setChats(sortChats(await listChats())); }
     catch (loadError) { setChatsError(`Couldn't load your chats. ${loadError.message}`); }
     finally { setChatsLoading(false); }
   }, [guest]);
 
-  // On first load (including a hard refresh) reopen the chat named in the address bar.
+  // On first load (including a hard refresh) reopen the chat named in the address bar - our own, or one shared
+  // with us via its link; loadMessages() below falls back to a new chat only if that actually fails.
   useEffect(() => {
-    refreshChats({ validateActive: true });
+    refreshChats();
     if (initialChatId) loadMessages(initialChatId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshChats]);
@@ -203,12 +201,19 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
       const rows = await fetchMessages(chatId);
       if (activeIdRef.current === chatId) setMessages(rows.map(toUiMessage));
       // A chat that never got its title (for example the connection dropped) is named when it is opened.
+      // A foreign (shared-with-us) chat isn't in chatsRef.current, so this naturally skips renaming someone
+      // else's chat: the lookup misses, the 'x' fallback never matches the "needs a title" pattern below.
       if (/^(new chat|new conversation|untitled)?$/i.test((chatsRef.current.find((chat) => chat.id === chatId)?.title || 'x').trim())) {
         const firstUser = rows.find((row) => row.role === 'user');
         requestTitle(chatId, firstUser?.content || rows.find((row) => row.role === 'assistant')?.content || '');
       }
     } catch (loadError) {
-      if (activeIdRef.current === chatId) setMessagesError(loadError.message);
+      if (activeIdRef.current !== chatId) return;
+      // 404 = the backend couldn't find this chat for us at all (not ours, and not shared with us either):
+      // that's the one case worth bouncing to a new chat instead of a dead screen. Any other failure (network,
+      // 5xx, expired session) stays as a retryable inline error instead of masking itself as "chat not found".
+      if (loadError.status === 404) { resetToNewChat('replace'); setError("We couldn't find that conversation, so a new chat was opened."); }
+      else setMessagesError(loadError.message);
     } finally {
       if (activeIdRef.current === chatId) setMessagesLoading(false);
     }
@@ -235,6 +240,12 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
     setError(''); patchChat(chat.id, { is_pinned: next });
     try { patchChat(chat.id, await setPinned(chat.id, next)); }
     catch (actionError) { patchChat(chat.id, { is_pinned: chat.is_pinned }); setError(`Couldn't ${next ? 'pin' : 'unpin'} the chat. ${actionError.message}`); }
+  };
+
+  const toggleShare = async (chat, next) => {
+    setError(''); patchChat(chat.id, { is_shared: next });
+    try { patchChat(chat.id, await setShared(chat.id, next)); }
+    catch (actionError) { patchChat(chat.id, { is_shared: chat.is_shared }); setError(`Couldn't ${next ? 'enable' : 'disable'} sharing. ${actionError.message}`); }
   };
 
   const toggleArchive = async (chat) => {
@@ -459,7 +470,8 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
     if (!navigator.mediaDevices?.getUserMedia) { setError('Microphone recording is not supported in this browser.'); return; }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, sampleRate: 44100 },
+        // Call-style processing (noise suppression, echo cancellation) can clip soft word starts; Whisper copes with raw audio.
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true, channelCount: 1 },
       });
       const recorder = new MediaRecorder(stream); audioChunksRef.current = []; mediaRecorderRef.current = recorder;
       recordingCancelledRef.current = false;
@@ -542,9 +554,10 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
         <header className="topbar">
           <button type="button" className="icon-button mobile-menu" onClick={() => setSidebarOpen(true)} aria-label="Open sidebar"><Menu size={19} /></button>
           <button type="button" className="icon-button expand-sidebar" onClick={() => updateCollapsed(false)} aria-label="Open sidebar"><PanelLeftOpen size={19} /></button>
-          {!guest && activeId && (
+          {!guest && activeId && activeChat && (
             <button type="button" className="topbar-share" onClick={() => setShareOpen(true)} aria-label="Share chat"><Share size={16} />Share</button>
           )}
+          {isForeignChat && <span className="topbar-shared-badge">Shared conversation</span>}
           {!user && (
             <div className="topbar-auth absolute right-4 top-[15px] z-20 flex items-center gap-2 sm:top-3">
               <button type="button" className={CTA_LOGIN} onClick={() => onRequestAuth('login')}>Log in</button>
@@ -580,28 +593,34 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
             <form className="composer" onSubmit={submitText} hidden={isRecording}>
               {audioFile && <div className="attachment-chip"><Paperclip size={13} />{shortenFileName(audioFile.name)}<button type="button" onClick={() => setAudioFile(null)} aria-label="Remove attachment"><X size={13} /></button></div>}
               <textarea
-                ref={textareaRef} value={text} rows={1} disabled={limitReached} placeholder={limitReached ? 'Sign up or log in to continue chatting' : 'Message TranslyAi...'} aria-label="Message"
+                ref={textareaRef} value={text} rows={1} disabled={limitReached || isForeignChat} placeholder={limitReached ? 'Sign up or log in to continue chatting' : isForeignChat ? "You're viewing a shared conversation" : 'Message TranslyAi...'} aria-label="Message"
                 onChange={(event) => { setText(event.target.value); resizeTextarea(event.target); }}
                 onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submitText(event); } }}
               />
               <div className="composer-controls">
                 <div className="composer-tools">
                   <input ref={fileInputRef} type="file" accept="audio/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) { setAudioFile(file); setError(''); } event.target.value = ''; }} hidden />
-                  <button type="button" className="tool-button" onClick={() => fileInputRef.current?.click()} disabled={limitReached} aria-label="Attach audio"><Paperclip size={18} /></button>
-                  <button type="button" className="tool-button" onClick={startRecording} disabled={limitReached} aria-label="Record audio"><Mic size={18} /></button>
+                  <button type="button" className="tool-button" onClick={() => fileInputRef.current?.click()} disabled={limitReached || isForeignChat} aria-label="Attach audio"><Paperclip size={18} /></button>
+                  <button type="button" className="tool-button" onClick={startRecording} disabled={limitReached || isForeignChat} aria-label="Record audio"><Mic size={18} /></button>
                 </div>
                 {/* The keys make React swap the two buttons instead of reusing one node, otherwise the Stop click would also submit the form as the node turns into the Send button. */}
                 {isLoading
                   ? <button key="stop" type="button" className="stop-button" onClick={stopGeneration} aria-label="Stop generating" title="Stop generating"><span className="stop-square" /></button>
-                  : <button key="send" type="submit" className="send-button" disabled={busy || limitReached || (!text.trim() && !audioFile)} aria-label="Send message">{isSaving ? <LoaderCircle size={18} className="spin" /> : <ArrowUp size={18} />}</button>}
+                  : <button key="send" type="submit" className="send-button" disabled={busy || limitReached || isForeignChat || (!text.trim() && !audioFile)} aria-label="Send message">{isSaving ? <LoaderCircle size={18} className="spin" /> : <ArrowUp size={18} />}</button>}
               </div>
             </form>
             {error && <div className="error-line error-toast" role="alert"><CircleAlert size={18} className="error-icon" /><span>{error}</span><button type="button" onClick={() => setError('')} aria-label="Dismiss message"><X size={14} /></button></div>}
-            <p className="composer-note mx-auto w-full text-center">{guest && !limitReached ? `Guest mode: ${freeLeft} free ${freeLeft === 1 ? 'message' : 'messages'} left. ` : ''}TranslyAi can make mistakes. Check important translations.</p>
+            <p className="composer-note mx-auto w-full text-center">{isForeignChat ? "You're viewing a shared conversation - start a new chat to reply. " : guest && !limitReached ? `Guest mode: ${freeLeft} free ${freeLeft === 1 ? 'message' : 'messages'} left. ` : ''}TranslyAi can make mistakes. Check important translations.</p>
           </div>
         </div>
       </main>
-      {shareOpen && activeChat && <ShareModal chat={activeChat} messages={messages} onClose={() => setShareOpen(false)} onCopied={() => showToast('Link copied')} onError={() => setError("Couldn't copy the link. Please copy it from the address bar.")} />}
+      {shareOpen && activeChat && (
+        <ShareModal
+          chat={activeChat} messages={messages} onClose={() => setShareOpen(false)}
+          onCopied={() => showToast('Link copied')} onError={() => setError("Couldn't copy the link. Please copy it from the address bar.")}
+          onToggleShare={(next) => toggleShare(activeChat, next)}
+        />
+      )}
       {toast && <div className="toast" role="status">{toast}</div>}
       {deleteTarget && <DeleteModal chat={deleteTarget} onCancel={() => setDeleteTarget(null)} onConfirm={() => { const chat = deleteTarget; setDeleteTarget(null); removeChat(chat); }} />}
       {guest && authPromptOpen && <AuthPrompt limitReached={limitReached} onClose={() => setAuthPromptOpen(false)} onRequestAuth={onRequestAuth} />}

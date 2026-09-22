@@ -104,9 +104,17 @@ class ChatStore:
 
     @classmethod
     async def list_chats(cls, token: str, archived: str = "false") -> list[dict]:
+        """Only this caller's own chats - explicit, not left to RLS alone.
+
+        Row-level security also allows reading chats someone else marked is_shared=true (see supabase/chats.sql),
+        so a chat other people shared with the world is only ever opened by its direct link, never mixed into
+        anyone else's own chat list here.
+        """
         params = {"select": "*", "order": "is_pinned.desc,updated_at.desc"}
         if archived in ("true", "false"):
             params["is_archived"] = f"eq.{archived}"
+        if user_id := user_id_from_token(token):
+            params["user_id"] = f"eq.{user_id}"
         return await cls._request("GET", "/chats", token, params=params) or []
 
     @classmethod

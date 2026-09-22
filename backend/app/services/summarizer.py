@@ -7,10 +7,15 @@ from google.genai import errors, types
 from app.config import settings
 from app.services.textclean import to_summary_text
 
+# Tried in order; a 429/RESOURCE_EXHAUSTED or 401/403 on one moves to the next (see generate_with_retry).
+# gemini-3.1-flash-lite is listed first because it is the tier that is actually available on the current quota -
+# gemini-3.6-flash and gemini-3.5-flash have been consistently returning 429 (see project notes), so trying them
+# first only burns two failed requests (and their 60s cooldown) before every reply. They stay as fallbacks in case
+# 3.1-flash-lite itself is ever exhausted or unavailable.
 GEMINI_MODELS = [
+    "gemini-3.1-flash-lite",
     "gemini-3.6-flash",
     "gemini-3.5-flash",
-    "gemini-3.1-flash-lite",
     "gemini-2.5-flash-lite",
 ]
 

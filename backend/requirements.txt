@@ -6,6 +6,7 @@ python-dotenv==1.0.1
 httpx==0.27.2
 requests>=2.28.0
 groq
+elevenlabs
 python-multipart==0.0.9
 supabase==2.9.0
 lingua-language-detector==2.0.2

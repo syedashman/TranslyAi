@@ -15,7 +15,11 @@ async function call(method, path, { data, params, timeout = DEFAULT_TIMEOUT_MS }
     const response = await axios({ method, url: `${API_BASE_URL}/api${path}`, data, params, timeout, headers: { Authorization: `Bearer ${token}` } });
     return response.data;
   } catch (error) {
-    throw new Error(describeError(error));
+    // .status lets callers tell "genuinely not found/not accessible" (404) apart from a transient failure,
+    // without changing the friendly message text that describeError already produced.
+    const wrapped = new Error(describeError(error));
+    wrapped.status = error?.response?.status ?? error?.status;
+    throw wrapped;
   }
 }
 
@@ -23,6 +27,7 @@ export const listChats = () => call('get', '/chats', { params: { archived: 'all'
 export const createChat = () => call('post', '/chats', { data: {} });
 export const setPinned = (chatId, value) => call('patch', `/chats/${chatId}/pin`, { data: { value } });
 export const setArchived = (chatId, value) => call('patch', `/chats/${chatId}/archive`, { data: { value } });
+export const setShared = (chatId, value) => call('patch', `/chats/${chatId}/share`, { data: { value } });
 export const deleteChat = (chatId) => call('delete', `/chats/${chatId}`);
 export const fetchMessages = (chatId) => call('get', `/chats/${chatId}/messages`);
 export const saveMessages = (chatId, messages) => call('post', `/chats/${chatId}/messages`, { data: { messages } });

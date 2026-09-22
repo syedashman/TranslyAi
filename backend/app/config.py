@@ -16,6 +16,14 @@ class Settings(BaseSettings):
     gemini_api_keys: str = ""
     hf_api_key: str = ""
     groq_api_key: str = ""
+    elevenlabs_api_key: str = ""
+    # Which STT provider /api/transcribe and /api/audio use, primary first.
+    # "elevenlabs" (Scribe v2, default): tried first, auto-falls back to Groq Whisper only if it fails.
+    # "whisper": Groq Whisper only, no ElevenLabs involved.
+    stt_provider: str = "elevenlabs"
+    # Comma-separated words/phrases to bias ElevenLabs Scribe v2 towards (product names, jargon, etc.).
+    # Edit this in .env, not in code. Leave blank for none.
+    elevenlabs_keyterms: str = ""
     supabase_url: str = ""
     supabase_anon_key: str = ""
     supabase_service_role_key: str = ""
@@ -40,6 +48,10 @@ class Settings(BaseSettings):
             if key and key not in keys:
                 keys.append(key)
         return keys
+
+    def elevenlabs_keyterm_list(self) -> list[str]:
+        """Configured keyterms, blank-free. Edit ELEVENLABS_KEYTERMS in .env to change this without a code change."""
+        return [term.strip() for term in self.elevenlabs_keyterms.split(",") if term.strip()]
 
 
 @lru_cache

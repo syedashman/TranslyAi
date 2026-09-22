@@ -27,6 +27,7 @@ class ChatOut(BaseModel):
     title: str
     is_pinned: bool
     is_archived: bool
+    is_shared: bool = False
     created_at: str
     updated_at: str
 

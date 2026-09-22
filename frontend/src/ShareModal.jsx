@@ -12,12 +12,19 @@ const RedditLogo = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="c
 const clip = (text) => (text.length > PREVIEW_CHARS ? `${text.slice(0, PREVIEW_CHARS).trimEnd()}...` : text);
 
 // Share dialog: a glass preview card of the chat plus quick actions for the chat's link.
-export default function ShareModal({ chat, messages, onClose, onCopied, onError }) {
+export default function ShareModal({ chat, messages, onClose, onCopied, onError, onToggleShare }) {
   const [copied, setCopied] = useState(false);
+  const [sharing, setSharing] = useState(false);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
   const timerRef = useRef(null);
   const url = window.location.href;
+  const isShared = Boolean(chat.is_shared);
+
+  const flipShare = async () => {
+    setSharing(true);
+    try { await onToggleShare(!isShared); } finally { setSharing(false); }
+  };
 
   useEffect(() => {
     const onKeyDown = (event) => { if (event.key === 'Escape') closeRef.current(); };
@@ -66,6 +73,13 @@ export default function ShareModal({ chat, messages, onClose, onCopied, onError 
           </div>
         </div>
 
+        <div className="share-toggle-row">
+          <span>{isShared ? 'Anyone with the link can view this chat' : 'Only you can currently open this link'}</span>
+          <button type="button" className={`share-toggle ${isShared ? 'on' : ''}`} role="switch" aria-checked={isShared} aria-label="Allow anyone with the link to view this chat" disabled={sharing} onClick={flipShare}>
+            <span className="share-toggle-knob" />
+          </button>
+        </div>
+
         <div className="share-link">
           <Link2 size={15} />
           <input type="text" readOnly value={url} aria-label="Chat link" onFocus={(event) => event.target.select()} />
@@ -80,7 +94,11 @@ export default function ShareModal({ chat, messages, onClose, onCopied, onError 
           ))}
         </div>
 
-        <p className="share-note">Your chats are private to your account, so this link opens for you when you are signed in.</p>
+        <p className="share-note">
+          {isShared
+            ? 'Anyone signed in with this link can view this conversation (read-only). Turn sharing off to make it private again.'
+            : 'Turn sharing on so this link works for other people too. Until then it only opens for you.'}
+        </p>
       </div>
     </div>
   );
