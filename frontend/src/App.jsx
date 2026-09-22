@@ -585,16 +585,21 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
         <header className="topbar">
           <button type="button" className="icon-button mobile-menu" onClick={() => setSidebarOpen(true)} aria-label="Open sidebar"><Menu size={19} /></button>
           <button type="button" className="icon-button expand-sidebar" onClick={() => updateCollapsed(false)} aria-label="Open sidebar"><PanelLeftOpen size={19} /></button>
-          {!guest && activeId && activeChat && (
-            <button type="button" className="topbar-share" onClick={() => setShareOpen(true)} aria-label="Share chat"><Share size={16} />Share</button>
-          )}
-          {isForeignChat && <span className="topbar-shared-badge">Shared conversation</span>}
-          {!user && (
-            <div className="topbar-auth absolute right-4 top-[15px] z-20 flex items-center gap-2 sm:top-3">
-              <button type="button" className={CTA_LOGIN} onClick={() => onRequestAuth('login')}>Log in</button>
-              <button type="button" className={CTA_SIGNUP} onClick={() => onRequestAuth('signup')}>Sign up</button>
-            </div>
-          )}
+          {/* One right-aligned group, not each piece pinned separately - a guest viewing a shared chat gets both
+              the "Shared conversation" badge and the Log in/Sign up buttons at once, and they need to sit side by
+              side instead of one (the absolutely-positioned auth buttons) covering the other. */}
+          <div className="topbar-end">
+            {!guest && activeId && activeChat && (
+              <button type="button" className="topbar-share" onClick={() => setShareOpen(true)} aria-label="Share chat"><Share size={16} />Share</button>
+            )}
+            {isForeignChat && <span className="topbar-shared-badge">Shared conversation</span>}
+            {!user && (
+              <div className="topbar-auth flex items-center gap-2">
+                <button type="button" className={CTA_LOGIN} onClick={() => onRequestAuth('login')}>Log in</button>
+                <button type="button" className={CTA_SIGNUP} onClick={() => onRequestAuth('signup')}>Sign up</button>
+              </div>
+            )}
+          </div>
         </header>
         <section className="conversation" aria-live="polite" ref={conversationRef}>
           {messagesLoading

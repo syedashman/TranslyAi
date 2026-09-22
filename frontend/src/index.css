@@ -381,7 +381,7 @@ button, textarea, select { font: inherit; } button { cursor: pointer; }
 
 .empty-state h1 { margin: 0; }
 
-/* Header Log in / Sign up for guests: positioned in the top-right corner of the chat area (styled by Tailwind utilities) */
+/* Header Log in / Sign up for guests: a normal flex child of .topbar-end (see above), styled by Tailwind utilities */
 .chat-layout { position: relative; }
 .auth-overlay { position: fixed; z-index: 200; inset: 0; overflow-y: auto; background: var(--c212121); }
 @media (max-width: 720px) {
@@ -395,11 +395,15 @@ button, textarea, select { font: inherit; } button { cursor: pointer; }
 /* Brand casing: the summary heading keeps its exact "TranslyAi summary" spelling (no forced uppercase) */
 .summary-heading { text-transform: none; letter-spacing: .02em; font-size: 12px; }
 
-/* Header Share button */
-.topbar-share { display: flex; margin-left: auto; align-items: center; gap: 7px; padding: 7px 14px; border: 1px solid var(--border); border-radius: 999px; color: var(--text); background: transparent; font: inherit; font-size: 14px; font-weight: 500; cursor: pointer; transition: background .15s ease, border-color .15s ease; }
+/* Header Share button, "Shared conversation" badge, and guest Log in/Sign up - one right-aligned group so any
+   combination of them (e.g. a guest viewing a shared chat gets the badge AND the auth buttons at once) sits side
+   by side with a normal gap, instead of the auth buttons being absolutely positioned and covering whatever the
+   badge happens to render underneath. */
+.topbar-end { display: flex; margin-left: auto; align-items: center; gap: 10px; }
+.topbar-share { display: flex; align-items: center; gap: 7px; padding: 7px 14px; border: 1px solid var(--border); border-radius: 999px; color: var(--text); background: transparent; font: inherit; font-size: 14px; font-weight: 500; cursor: pointer; transition: background .15s ease, border-color .15s ease; }
 .topbar-share:hover { background: var(--surface-2); border-color: #5a5a5a; }
 .topbar-share:focus-visible { outline: 2px solid #f97316; outline-offset: 2px; }
-.topbar-shared-badge { display: flex; margin-left: auto; align-items: center; padding: 7px 14px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); font-size: 14px; font-weight: 500; }
+.topbar-shared-badge { display: flex; align-items: center; padding: 7px 14px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); font-size: 14px; font-weight: 500; white-space: nowrap; }
 
 /* User message actions (copy / edit) and inline editing */
 .user-message { display: flex; max-width: 72%; flex-direction: column; align-items: flex-end; }
