@@ -4,6 +4,7 @@ import asyncio
 from typing import Optional
 
 from app.services.language import LanguageService
+from app.services.moderation import ModerationService, ProhibitedContentError
 from app.services.speech import SpeechService
 from app.services.summarizer import SummarizerService
 from app.services.translation import TranslationService
@@ -23,6 +24,16 @@ async def translate_and_summarize(
 
     if audio_path:
         text = await SpeechService.transcribe_file(audio_path, language=normalized_source)
+
+    # Moderate the transcript itself, after STT - before it ever reaches Gemini translation. ModerationService.check
+    # already fails open internally (a moderation-call failure never blocks), but this stays fail-open too: only a
+    # genuine ProhibitedContentError (caught by the route) stops the pipeline; nothing else raised here should.
+    try:
+        await asyncio.to_thread(ModerationService.check, text)
+    except ProhibitedContentError:
+        raise
+    except Exception as error:
+        print(f"MODERATION CHECK ERROR (allowing content through): {error}")
 
     detected_language = normalized_source or LanguageService.detect(text)
 

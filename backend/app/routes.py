@@ -4,6 +4,7 @@ from typing import Awaitable, Literal, Optional, TypeVar
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Response, UploadFile
+from fastapi.responses import JSONResponse
 
 from app.schemas import (
     ChatCreateRequest,
@@ -19,6 +20,7 @@ from app.schemas import (
 )
 from app.services.chat_store import ChatStore, ChatStoreError
 from app.services.language import LanguageService
+from app.services.moderation import ModerationService, ProhibitedContentError
 from app.services.speech import SpeechService
 from app.services.summarizer import SummarizerService
 from app.services.titler import TitleService
@@ -27,10 +29,21 @@ from app.services.translator import translate_and_summarize
 
 router = APIRouter(prefix="/api", tags=["translator"])
 
+PROHIBITED_CONTENT_BODY = {"error": "prohibited_content", "message": "This content cannot be translated."}
+
 
 @router.post("/translate", response_model=TranslationResponse)
 async def translate_endpoint(request: TranslationRequest):
     source_language = getattr(request, "source_lang", request.source_language)
+    try:
+        # Moderate the user's original input before it ever reaches Gemini translation. A moderation-call
+        # failure or timeout is never treated as "blocked" - it falls straight through to translation as usual.
+        await asyncio.wait_for(asyncio.to_thread(ModerationService.check, request.text), timeout=15.0)
+    except ProhibitedContentError:
+        return JSONResponse(status_code=422, content=PROHIBITED_CONTENT_BODY)
+    except Exception as exc:
+        print(f"MODERATION ENDPOINT ERROR (allowing through): {exc}")
+
     try:
         detected_language = LanguageService.normalize_code(source_language)
         if detected_language is None:
@@ -120,6 +133,8 @@ async def transcribe_audio(
             audio_path=audio_path,
         )
         return result
+    except ProhibitedContentError:
+        return JSONResponse(status_code=422, content=PROHIBITED_CONTENT_BODY)
     except ValueError as exc:
         print(f"AUDIO ENDPOINT VALUE ERROR: {exc}")
         raise HTTPException(status_code=400, detail=str(exc)) from exc

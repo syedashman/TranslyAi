@@ -7,6 +7,7 @@ export const MESSAGES = {
   database: 'Unable to connect to database. Please check your connection.',
   databaseSetup: 'The chat database is not set up correctly yet. Please contact the site administrator.',
   transcription: "We couldn't transcribe that audio. Please try again or record a clearer clip.",
+  prohibited: 'This content cannot be translated.',
   server: 'Server error: Something went wrong on TranslyAi\'s side. Please try again in a moment.',
   unavailable: 'Server unavailable: TranslyAi server is temporarily down or restarting. Please try again in a minute.',
   generic: 'Something went wrong. Please try again.',
@@ -20,7 +21,10 @@ const STT = /groq|transcri|speech|whisper/i;
 
 export function describeError(error, fallback = MESSAGES.generic) {
   const status = error?.response?.status ?? error?.status;
-  const rawDetail = error?.response?.data?.detail ?? error?.detail;
+  const payload = error?.response?.data;
+  // The moderation layer returns this exact shape (not the usual {detail: ...} envelope) when it blocks input.
+  if (payload && payload.error === 'prohibited_content') return payload.message || MESSAGES.prohibited;
+  const rawDetail = payload?.detail ?? error?.detail;
   const detail = typeof rawDetail === 'string' ? rawDetail : '';
   const message = detail || error?.message || '';
   // The exact cause stays in the console for debugging while the screen shows the friendly text.

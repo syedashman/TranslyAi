@@ -373,7 +373,9 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
     });
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
-      throw Object.assign(new Error(`HTTP ${response.status}`), { status: response.status, detail: body?.detail });
+      // Shaped like an axios error (response.status/response.data) so describeError's single code path - including
+      // its prohibited_content check - reads this the same way it reads every other request in the app.
+      throw Object.assign(new Error(`HTTP ${response.status}`), { status: response.status, response: { status: response.status, data: body } });
     }
     return response.json();
   };
