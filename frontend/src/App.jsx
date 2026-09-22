@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import axios from 'axios';
 import ChatSidebar from './ChatSidebar';
 import DeleteModal from './DeleteModal';
@@ -6,7 +6,7 @@ import ShareModal from './ShareModal';
 import VoiceBar from './VoiceBar';
 import {
   ArrowUp, CircleAlert, Copy, LoaderCircle,
-  Menu, Mic, PanelLeftOpen, Paperclip, Pencil, Share, Sparkles, X,
+  Menu, Mic, PanelLeftOpen, Paperclip, Pause, Pencil, Play, Share, Sparkles, Volume2, X,
 } from 'lucide-react';
 import { API_BASE_URL } from './lib/config';
 import { describeError, isBusyResult, MESSAGES } from './lib/errors';
@@ -17,6 +17,13 @@ import {
   createChat, deleteChat, deleteMessages, fetchMessages, fetchSharedChat, generateTitle, listChats, saveMessages,
   setArchived, setPinned, setShared, sortChats, toApiMessage, toUiMessage,
 } from './lib/chatApi';
+import { isSpeechSupported, speechStatusFor, stopSpeech, subscribeSpeech, toggleSpeech } from './lib/speech';
+
+// Re-renders only the message whose own speech status actually changed, even though every Message subscribes to
+// the same global store - useSyncExternalStore bails out when the selected value (a plain string) is unchanged.
+function useSpeechStatus(id) {
+  return useSyncExternalStore(subscribeSpeech, () => speechStatusFor(id));
+}
 
 const AUDIO_TIMEOUT_MS = 60000;
 const COLLAPSE_KEY = 'linguaai-sidebar-collapsed';
@@ -186,6 +193,12 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
   useEffect(() => {
     if (conversationRef.current) conversationRef.current.scrollTop = conversationRef.current.scrollHeight;
   }, [messages, messagesLoading, pending]);
+
+  // A cleanup function always runs both when its own effect is about to re-run and when the component unmounts,
+  // so this one call covers both "switched to a different chat" (stopSpeech fires right before the effect re-runs
+  // for the new activeId) and "the whole app unmounted" (sign out, tab close) - either way, no reply keeps being
+  // read aloud once it's no longer the conversation on screen.
+  useEffect(() => stopSpeech, [activeId]);
 
   // Nothing is shown for this: it only wakes the free-tier server so the first real request is not slow.
   useEffect(() => { axios.get(`${API_BASE_URL}/health`, { timeout: 60000 }).catch(() => {}); }, []);
@@ -710,7 +723,17 @@ function EditBox({ initial, onCancel, onSubmit }) {
   );
 }
 
+// Only one Play/Pause icon + tooltip/aria-label per state, matching the browser's actual speechSynthesis state.
+const SPEECH_BUTTON = {
+  idle: { Icon: Volume2, label: 'Listen' },
+  playing: { Icon: Pause, label: 'Pause' },
+  paused: { Icon: Play, label: 'Resume' },
+};
+
 function Message({ message, editing, canEdit, onCopy, onStartEdit, onCancelEdit, onSubmitEdit }) {
+  // Called unconditionally (rules of hooks) even for user messages, which simply never read this value.
+  const speechStatus = useSpeechStatus(message.id);
+
   if (message.role === 'user') {
     return (
       <div className="message-row user-row">
@@ -730,7 +753,8 @@ function Message({ message, editing, canEdit, onCopy, onStartEdit, onCancelEdit,
   }
   const { result } = message;
   if (!result) return null;
-  return <div className="message-row assistant-row"><div className="avatar assistant-avatar"><Sparkles size={15} /></div><div className="assistant-content"><div className="assistant-label">TranslyAi</div><div className="translation-card"><div className="result-heading"><span>English translation</span><button type="button" className="mini-action" aria-label="Copy translation" onClick={() => onCopy(result.english_translation, 'Translation copied')}><Copy size={14} /></button></div>{paragraphs(result.english_translation).map((paragraph, index) => <p key={index}>{paragraph}</p>)}</div><div className="summary-card"><div className="summary-heading"><Sparkles size={14} />TranslyAi summary</div><SummaryText text={result.summary} /></div><div className="message-actions">{/* Text-to-speech is hidden for now: <button type="button" aria-label="Read translation aloud"><Volume2 size={14} /></button> */}<button type="button" aria-label="Copy response" onClick={() => onCopy(`${result.english_translation}\n\n${result.summary.replace(/\*\*/g, '')}`)}><Copy size={14} /></button></div></div></div>;
+  const { Icon: SpeechIcon, label: speechLabel } = SPEECH_BUTTON[speechStatus];
+  return <div className="message-row assistant-row"><div className="avatar assistant-avatar"><Sparkles size={15} /></div><div className="assistant-content"><div className="assistant-label">TranslyAi</div><div className="translation-card"><div className="result-heading"><span>English translation</span><div className="result-actions">{isSpeechSupported && <button type="button" className={`mini-action ${speechStatus === 'playing' ? 'is-speaking' : ''}`} aria-label={`${speechLabel} translation`} title={speechLabel} onClick={() => toggleSpeech(message.id, result.english_translation)}><SpeechIcon size={14} /></button>}<button type="button" className="mini-action" aria-label="Copy translation" title="Copy" onClick={() => onCopy(result.english_translation, 'Translation copied')}><Copy size={14} /></button></div></div>{paragraphs(result.english_translation).map((paragraph, index) => <p key={index}>{paragraph}</p>)}</div><div className="summary-card"><div className="summary-heading"><Sparkles size={14} />TranslyAi summary</div><SummaryText text={result.summary} /></div><div className="message-actions"><button type="button" aria-label="Copy response" title="Copy" onClick={() => onCopy(`${result.english_translation}\n\n${result.summary.replace(/\*\*/g, '')}`)}><Copy size={14} /></button></div></div></div>;
 }
 
 const paragraphs = (text) => String(text || '').split(/\n{2,}/).map((part) => part.trim()).filter(Boolean);
