@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">TranslyAi</string>
+    <string name="title_activity_main">TranslyAi</string>
+    <string name="package_name">com.translyai.app</string>
+    <string name="custom_url_scheme">com.translyai.app</string>
+</resources>

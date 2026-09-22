@@ -3,11 +3,15 @@ import { LoaderCircle } from 'lucide-react';
 import App from './App';
 import AuthPage from './AuthPage';
 import { supabase } from './lib/supabase';
+import { hideSplash, wireBackButton } from './lib/native';
 
 export default function AuthGate() {
   const [session, setSession] = useState(undefined);
   const [profile, setProfile] = useState(null);
   const [authView, setAuthView] = useState(null); // 'login' | 'signup' while a guest is signing in
+
+  // Both no-op on the web (see lib/native.js) - only relevant inside the packaged Android app.
+  useEffect(() => { hideSplash(); wireBackButton(); }, []);
 
   useEffect(() => {
     if (!supabase) { setSession(null); return undefined; }

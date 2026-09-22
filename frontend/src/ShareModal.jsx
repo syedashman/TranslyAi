@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { Check, Link2, Sparkles, X } from 'lucide-react';
 import { copyText } from './lib/clipboard';
+import { WEB_ORIGIN } from './lib/config';
+import { isNative, openExternal } from './lib/native';
 
 const PREVIEW_LIMIT = 4;
 const PREVIEW_CHARS = 170;
@@ -18,7 +20,9 @@ export default function ShareModal({ chat, messages, onClose, onCopied, onError,
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
   const timerRef = useRef(null);
-  const url = window.location.href;
+  // On native, window.location.href is Capacitor's internal https://localhost origin - swap in the real public
+  // site so a link shared from inside the Android app actually opens the chat for whoever receives it.
+  const url = isNative ? `${WEB_ORIGIN}/${window.location.search}` : window.location.href;
   const isShared = Boolean(chat.is_shared);
 
   const flipShare = async () => {
@@ -49,7 +53,7 @@ export default function ShareModal({ chat, messages, onClose, onCopied, onError,
 
   const encoded = encodeURIComponent(url);
   const title = encodeURIComponent(chat.title);
-  const open = (href) => window.open(href, '_blank', 'noopener,noreferrer');
+  const open = (href) => openExternal(href);
   const targets = [
     { label: 'X', icon: <XLogo />, href: `https://twitter.com/intent/tweet?url=${encoded}&text=${title}` },
     { label: 'LinkedIn', icon: <LinkedInLogo />, href: `https://www.linkedin.com/sharing/share-offsite/?url=${encoded}` },
