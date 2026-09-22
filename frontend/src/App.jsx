@@ -6,7 +6,7 @@ import ShareModal from './ShareModal';
 import VoiceBar from './VoiceBar';
 import {
   ArrowUp, CircleAlert, Copy, LoaderCircle,
-  Menu, Mic, PanelLeftOpen, Paperclip, Pencil, Share, Sparkles, X,
+  Mail, Menu, Mic, PanelLeftOpen, Paperclip, Pencil, Share, Sparkles, X,
 } from 'lucide-react';
 import { API_BASE_URL } from './lib/config';
 import { describeError, isBusyResult, MESSAGES } from './lib/errors';
@@ -715,6 +715,29 @@ function EditBox({ initial, onCancel, onSubmit }) {
   );
 }
 
+// Translation + summary, using the exact same two values already rendered on screen (result.english_translation,
+// result.summary) - nothing is regenerated or re-requested. The '**' strip matches the existing "Copy response"
+// button just below, which already treats that as the plain-text form of the summary for contexts outside the
+// markdown-aware SummaryText renderer.
+const buildEmailBody = (translation, summary) => {
+  const cleanSummary = (summary || '').replace(/\*\*/g, '').trim();
+  return cleanSummary ? `Translation:\n\n${translation}\n\nSummary:\n\n${cleanSummary}` : `Translation:\n\n${translation}`;
+};
+
+// Gmail's own compose URL, not mailto: - opens Gmail web directly (no OS chooser, no default-mail-client
+// dependency). No "to" param on purpose: the user picks the recipient themselves inside Gmail. su/body are
+// percent-encoded via encodeURIComponent, which correctly handles spaces, line breaks, punctuation, and any
+// Unicode script (Urdu/Roman Urdu included).
+const buildGmailComposeUrl = (subject, body) =>
+  `https://mail.google.com/mail/?view=cm&fs=1&tf=1&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+
+// Opened in a new tab, directly from the click handler (not after an await) so browser popup blockers treat it as
+// a genuine user-initiated navigation. Deliberately no fallback: if a blocker suppresses the new tab, this must
+// stay a no-op rather than ever navigating the current TranslyAi tab away.
+function openGmailCompose(subject, body) {
+  window.open(buildGmailComposeUrl(subject, body), '_blank', 'noopener,noreferrer');
+}
+
 function Message({ message, editing, canEdit, onCopy, onStartEdit, onCancelEdit, onSubmitEdit }) {
   if (message.role === 'user') {
     return (
@@ -735,7 +758,7 @@ function Message({ message, editing, canEdit, onCopy, onStartEdit, onCancelEdit,
   }
   const { result } = message;
   if (!result) return null;
-  return <div className="message-row assistant-row"><div className="avatar assistant-avatar"><Sparkles size={15} /></div><div className="assistant-content"><div className="assistant-label">TranslyAi</div><div className="translation-card"><div className="result-heading"><span>English translation</span><button type="button" className="mini-action" aria-label="Copy translation" onClick={() => onCopy(result.english_translation, 'Translation copied')}><Copy size={14} /></button></div>{paragraphs(result.english_translation).map((paragraph, index) => <p key={index}>{paragraph}</p>)}</div><div className="summary-card"><div className="summary-heading"><Sparkles size={14} />TranslyAi summary</div><SummaryText text={result.summary} /></div><div className="message-actions">{/* Text-to-speech is hidden for now: <button type="button" aria-label="Read translation aloud"><Volume2 size={14} /></button> */}<button type="button" aria-label="Copy response" onClick={() => onCopy(`${result.english_translation}\n\n${result.summary.replace(/\*\*/g, '')}`)}><Copy size={14} /></button></div></div></div>;
+  return <div className="message-row assistant-row"><div className="avatar assistant-avatar"><Sparkles size={15} /></div><div className="assistant-content"><div className="assistant-label">TranslyAi</div><div className="translation-card"><div className="result-heading"><span>English translation</span><button type="button" className="mini-action" aria-label="Copy translation" title="Copy" onClick={() => onCopy(result.english_translation, 'Translation copied')}><Copy size={14} /></button></div>{paragraphs(result.english_translation).map((paragraph, index) => <p key={index}>{paragraph}</p>)}</div><div className="summary-card"><div className="summary-heading"><Sparkles size={14} />TranslyAi summary</div><SummaryText text={result.summary} /></div><div className="message-actions"><button type="button" aria-label="Copy response" title="Copy" onClick={() => onCopy(`${result.english_translation}\n\n${result.summary.replace(/\*\*/g, '')}`)}><Copy size={14} /></button><button type="button" aria-label="Email response" title="Email" onClick={() => openGmailCompose('TranslyAI Translation', buildEmailBody(result.english_translation, result.summary))}><Mail size={14} /></button></div></div></div>;
 }
 
 const paragraphs = (text) => String(text || '').split(/\n{2,}/).map((part) => part.trim()).filter(Boolean);
