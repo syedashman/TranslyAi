@@ -2,16 +2,18 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 import ChatSidebar from './ChatSidebar';
 import DeleteModal from './DeleteModal';
+import MeetingModal from './MeetingModal';
 import ShareModal from './ShareModal';
 import VoiceBar from './VoiceBar';
 import {
   ArrowUp, CircleAlert, Copy, LoaderCircle,
-  Mail, Menu, Mic, PanelLeftOpen, Paperclip, Pencil, Share, Sparkles, X,
+  Mail, Menu, Mic, PanelLeftOpen, Paperclip, Pencil, Share, Sparkles, Users, X,
 } from 'lucide-react';
 import { API_BASE_URL } from './lib/config';
 import { describeError, isBusyResult, MESSAGES } from './lib/errors';
 import { CTA_LOGIN, CTA_SIGNUP } from './lib/authCta';
 import { copyText } from './lib/clipboard';
+import { buildEmailBody, openGmailCompose } from './lib/email';
 import { bumpGuestCount, getGuestCount, GUEST_LIMIT } from './lib/guest';
 import {
   createChat, deleteChat, deleteMessages, fetchMessages, fetchSharedChat, generateTitle, listChats, saveMessages,
@@ -69,6 +71,7 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
   const [authPromptOpen, setAuthPromptOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null); // the chat waiting for delete confirmation
   const [shareOpen, setShareOpen] = useState(false);
+  const [meetingOpen, setMeetingOpen] = useState(false);
   const [editingId, setEditingId] = useState(null); // the user message being edited
   const [toast, setToast] = useState('');
   const toastTimerRef = useRef(null);
@@ -638,6 +641,9 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
                   <input ref={fileInputRef} type="file" accept="audio/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) { setAudioFile(file); setError(''); } event.target.value = ''; }} hidden />
                   <button type="button" className="tool-button" onClick={() => fileInputRef.current?.click()} disabled={limitReached || isForeignChat} aria-label="Attach audio"><Paperclip size={18} /></button>
                   <button type="button" className="tool-button" onClick={startRecording} disabled={limitReached || isForeignChat} aria-label="Record audio"><Mic size={18} /></button>
+                  {!guest && (
+                    <button type="button" className="tool-button" onClick={() => setMeetingOpen(true)} disabled={isRecording} aria-label="Start meeting" title="Start Meeting"><Users size={18} /></button>
+                  )}
                 </div>
                 {/* The keys make React swap the two buttons instead of reusing one node, otherwise the Stop click would also submit the form as the node turns into the Send button. */}
                 {isLoading
@@ -658,6 +664,7 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
         />
       )}
       {toast && <div className="toast" role="status">{toast}</div>}
+      {meetingOpen && <MeetingModal onClose={() => setMeetingOpen(false)} onCopy={copyWithToast} />}
       {deleteTarget && <DeleteModal chat={deleteTarget} onCancel={() => setDeleteTarget(null)} onConfirm={() => { const chat = deleteTarget; setDeleteTarget(null); removeChat(chat); }} />}
       {guest && authPromptOpen && <AuthPrompt limitReached={limitReached} onClose={() => setAuthPromptOpen(false)} onRequestAuth={onRequestAuth} />}
     </div>
@@ -713,29 +720,6 @@ function EditBox({ initial, onCancel, onSubmit }) {
       </div>
     </div>
   );
-}
-
-// Translation + summary, using the exact same two values already rendered on screen (result.english_translation,
-// result.summary) - nothing is regenerated or re-requested. The '**' strip matches the existing "Copy response"
-// button just below, which already treats that as the plain-text form of the summary for contexts outside the
-// markdown-aware SummaryText renderer.
-const buildEmailBody = (translation, summary) => {
-  const cleanSummary = (summary || '').replace(/\*\*/g, '').trim();
-  return cleanSummary ? `Translation:\n\n${translation}\n\nSummary:\n\n${cleanSummary}` : `Translation:\n\n${translation}`;
-};
-
-// Gmail's own compose URL, not mailto: - opens Gmail web directly (no OS chooser, no default-mail-client
-// dependency). No "to" param on purpose: the user picks the recipient themselves inside Gmail. su/body are
-// percent-encoded via encodeURIComponent, which correctly handles spaces, line breaks, punctuation, and any
-// Unicode script (Urdu/Roman Urdu included).
-const buildGmailComposeUrl = (subject, body) =>
-  `https://mail.google.com/mail/?view=cm&fs=1&tf=1&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-
-// Opened in a new tab, directly from the click handler (not after an await) so browser popup blockers treat it as
-// a genuine user-initiated navigation. Deliberately no fallback: if a blocker suppresses the new tab, this must
-// stay a no-op rather than ever navigating the current TranslyAi tab away.
-function openGmailCompose(subject, body) {
-  window.open(buildGmailComposeUrl(subject, body), '_blank', 'noopener,noreferrer');
 }
 
 function Message({ message, editing, canEdit, onCopy, onStartEdit, onCancelEdit, onSubmitEdit }) {

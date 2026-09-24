@@ -6,8 +6,10 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.meeting_routes import router as meeting_router
 from app.routes import router
 from app.services.chat_store import ChatStore
+from app.services.meeting_store import MeetingStore
 
 logger = logging.getLogger("ai-translator")
 logging.basicConfig(level=logging.INFO)
@@ -29,6 +31,7 @@ async def lifespan(app: FastAPI):
     _log_memory_usage("startup")
     yield
     await ChatStore.close()
+    await MeetingStore.close()
 
 
 app = FastAPI(
@@ -53,6 +56,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 
 app.include_router(router)
+app.include_router(meeting_router)
 
 
 @app.get("/health")

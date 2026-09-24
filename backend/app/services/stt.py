@@ -60,47 +60,68 @@ class STTService:
         return cls._elevenlabs_client
 
     @classmethod
-    async def transcribe_with_whisper(cls, file_path: str, language: Optional[str] = None) -> str:
-        """Raw transcript from Groq Whisper-large-v3 (language forced, temperature 0.0, no clean-up)."""
+    async def transcribe_with_whisper(
+        cls, file_path: str, language: Optional[str] = None, *, auto_detect: bool = False, timeout: Optional[float] = None
+    ) -> str:
+        """Raw transcript from Groq Whisper-large-v3 (temperature 0.0, no clean-up).
+
+        auto_detect=False (default, unchanged behavior): language defaults to "ur" and the Urdu-biased style
+        prompt is sent, exactly as before. auto_detect=True (used by the meeting pipeline for multilingual
+        recordings): neither is forced, letting Whisper detect the spoken language itself.
+        """
         client = cls._get_groq_client()
-        language = language or DEFAULT_LANGUAGE
+        if not auto_detect:
+            language = language or DEFAULT_LANGUAGE
 
         def _call() -> str:
             # Pass the open handle (not bytes/path) so the SDK streams it instead of loading it into RAM.
             with open(file_path, "rb") as file:
+                kwargs: dict = {}
+                if language:
+                    kwargs["language"] = language
+                if not auto_detect:
+                    kwargs["prompt"] = WHISPER_PROMPT
                 transcription = client.audio.transcriptions.create(
                     file=(os.path.basename(file_path), file),
                     model=WHISPER_MODEL,
-                    prompt=WHISPER_PROMPT,
                     response_format="text",
                     temperature=0.0,
-                    language=language,
+                    **kwargs,
                 )
             return str(transcription)
 
         try:
             # The SDK call is synchronous network I/O; run it off the event loop and bound how long it may block.
-            return await asyncio.wait_for(asyncio.to_thread(_call), timeout=STT_PROVIDER_TIMEOUT_SECONDS)
+            return await asyncio.wait_for(asyncio.to_thread(_call), timeout=timeout or STT_PROVIDER_TIMEOUT_SECONDS)
         except Exception as error:
             print(f"GROQ STT ERROR: {error.__class__.__name__}: {error}")
             raise
 
     @classmethod
-    async def transcribe_with_elevenlabs(cls, file_path: str, language: Optional[str] = None) -> str:
-        """Raw transcript from ElevenLabs Scribe v2 (temperature 0.0, verbatim, no clean-up)."""
+    async def transcribe_with_elevenlabs(
+        cls, file_path: str, language: Optional[str] = None, *, auto_detect: bool = False, timeout: Optional[float] = None
+    ) -> str:
+        """Raw transcript from ElevenLabs Scribe v2 (temperature 0.0, verbatim, no clean-up).
+
+        auto_detect=True (meeting pipeline only): no language_code is sent at all, so Scribe v2 detects the
+        spoken language itself instead of being forced to "ur" - meetings may mix Urdu, Hindi, Sindhi, English,
+        German, etc. Default behavior (auto_detect=False) is unchanged.
+        """
         client = cls._get_elevenlabs_client()
-        language = language or DEFAULT_LANGUAGE
+        if not auto_detect:
+            language = language or DEFAULT_LANGUAGE
         keyterms = settings.elevenlabs_keyterm_list()
 
         def _call() -> str:
             with open(file_path, "rb") as file:
-                # keyterms is only passed when non-empty: the SDK treats an explicit None differently from
-                # the argument being omitted, and an empty list is not useful to send.
-                extra = {"keyterms": keyterms} if keyterms else {}
+                # keyterms/language_code are only passed when set: the SDK treats an explicit None differently
+                # from the argument being omitted entirely.
+                extra: dict = {"keyterms": keyterms} if keyterms else {}
+                if language:
+                    extra["language_code"] = language
                 response = client.speech_to_text.convert(
                     model_id=ELEVENLABS_MODEL,
                     file=(os.path.basename(file_path), file),
-                    language_code=language,
                     temperature=0.0,
                     # False = keep filler words, false starts and repeats; only Scribe v2 supports this flag.
                     no_verbatim=False,
@@ -111,35 +132,40 @@ class STTService:
 
         try:
             # The SDK call is synchronous network I/O; run it off the event loop and bound how long it may block.
-            return await asyncio.wait_for(asyncio.to_thread(_call), timeout=STT_PROVIDER_TIMEOUT_SECONDS)
+            return await asyncio.wait_for(asyncio.to_thread(_call), timeout=timeout or STT_PROVIDER_TIMEOUT_SECONDS)
         except Exception as error:
             # Message only: never the request/response object, so an API-key or header value can't end up in a log.
             print(f"ELEVENLABS STT ERROR: {error.__class__.__name__}: {error}")
             raise
 
     @classmethod
-    async def transcribe(cls, file_path: str, language: Optional[str] = None) -> tuple[str, str]:
+    async def transcribe(
+        cls, file_path: str, language: Optional[str] = None, *, auto_detect: bool = False, timeout: Optional[float] = None
+    ) -> tuple[str, str]:
         """Raw transcript from whichever provider STT_PROVIDER selects, plus the provider that actually produced it.
 
         STT_PROVIDER=elevenlabs (the default): ElevenLabs Scribe v2 is always tried first. A successful response is
         used as-is and Groq is never called. Only when ElevenLabs raises - network/API/timeout/auth error, or any
         other exception - does this fall back to Groq Whisper automatically.
         STT_PROVIDER=whisper: Groq Whisper only, exactly as before, with no ElevenLabs fallback either way.
+
+        auto_detect and timeout are passed straight through to whichever provider(s) are tried; both default to
+        the existing short-voice behavior (forced "ur", the existing 45s provider timeout) when not given.
         """
         provider = (settings.stt_provider or "elevenlabs").strip().lower()
 
         if provider == "whisper":
-            return await cls.transcribe_with_whisper(file_path, language), "whisper"
+            return await cls.transcribe_with_whisper(file_path, language, auto_detect=auto_detect, timeout=timeout), "whisper"
 
         if provider != "elevenlabs":
             print(f"STT_PROVIDER '{provider}' is not recognized; using 'elevenlabs'.")
 
         try:
-            text = await cls.transcribe_with_elevenlabs(file_path, language)
+            text = await cls.transcribe_with_elevenlabs(file_path, language, auto_detect=auto_detect, timeout=timeout)
         except Exception as primary_error:
             print(f"STT DEBUG: primary=elevenlabs status=failed fallback=groq_whisper reason={primary_error.__class__.__name__}")
             try:
-                text = await cls.transcribe_with_whisper(file_path, language)
+                text = await cls.transcribe_with_whisper(file_path, language, auto_detect=auto_detect, timeout=timeout)
             except Exception as fallback_error:
                 # Both providers failed: surface one clear, specific error instead of a generic 500 - this is the
                 # only case where the caller doesn't get a transcript, so it needs to say why.

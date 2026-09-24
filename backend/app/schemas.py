@@ -74,3 +74,18 @@ class SharedChatView(BaseModel):
 
     chat: ChatOut
     messages: list[MessageOut]
+
+
+class MeetingCreateResponse(BaseModel):
+    id: str
+    status: str
+
+
+class MeetingStatusResponse(BaseModel):
+    id: str
+    status: str
+    duration_seconds: Optional[int] = None
+    transcript: Optional[str] = None
+    translation: Optional[str] = None
+    summary: Optional[str] = None
+    error_message: Optional[str] = None

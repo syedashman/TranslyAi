@@ -12,8 +12,12 @@ MAX_AUDIO_BYTES = 25 * 1024 * 1024
 
 class SpeechService:
     @staticmethod
-    async def save_upload(upload: UploadFile) -> str:
-        """Stream an upload to a temp file in chunks so the audio is never fully held in RAM."""
+    async def save_upload(upload: UploadFile, max_bytes: int = MAX_AUDIO_BYTES) -> str:
+        """Stream an upload to a temp file in chunks so the audio is never fully held in RAM.
+
+        max_bytes defaults to the existing 25 MB short-voice limit; the meeting pipeline passes a much larger
+        limit (see meeting_routes.py) since a 30-100 minute recording is naturally bigger than a short clip.
+        """
         suffix = os.path.splitext(upload.filename or "")[1] or ".wav"
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temp_file:
             temp_path = temp_file.name
@@ -21,8 +25,8 @@ class SpeechService:
             try:
                 while chunk := await upload.read(UPLOAD_CHUNK_BYTES):
                     total += len(chunk)
-                    if total > MAX_AUDIO_BYTES:
-                        raise ValueError("Audio file is too large (25 MB maximum).")
+                    if total > max_bytes:
+                        raise ValueError(f"Audio file is too large ({max_bytes // (1024 * 1024)} MB maximum).")
                     temp_file.write(chunk)
             except Exception:
                 temp_file.close()
@@ -44,8 +48,11 @@ class SpeechService:
             pass
 
     @classmethod
-    async def transcribe_file(cls, audio_path: str, language: Optional[str] = None, roman: bool = False) -> str:
+    async def transcribe_file(
+        cls, audio_path: str, language: Optional[str] = None, roman: bool = False,
+        *, auto_detect: bool = False, timeout: Optional[float] = None,
+    ) -> str:
         if roman:
             return await STTService.transcribe_roman(audio_path, language=language)
-        text, _provider = await STTService.transcribe(audio_path, language=language)
+        text, _provider = await STTService.transcribe(audio_path, language=language, auto_detect=auto_detect, timeout=timeout)
         return text
