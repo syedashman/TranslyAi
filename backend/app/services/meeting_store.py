@@ -124,9 +124,12 @@ class MeetingStore:
         (see supabase/meetings.sql's status values). Soft-fails to an empty list (logged) rather than erroring the
         whole sidebar - e.g. before supabase/meetings.sql has ever been run, "no history yet" and "not set up
         yet" look the same to the user and neither should break the page.
+
+        Deliberately does not select updated_at: nothing reads it (the list only ever shows created_at), and
+        selecting a column some already-deployed tables don't have would 42703 the whole query for no benefit.
         """
         params = {
-            "select": "id,status,duration_seconds,summary,created_at,updated_at",
+            "select": "id,status,duration_seconds,summary,created_at",
             "status": "eq.completed", "order": "created_at.desc",
         }
         if user_id:
@@ -141,9 +144,11 @@ class MeetingStore:
     async def get_for_user(cls, token: str, user_id: Optional[str], meeting_id: str) -> Optional[dict]:
         """One completed meeting's full translation/summary (still never transcript - see schemas.MeetingDetail).
         Only ever returns a status='completed' row: a failed/in-progress job's id can't be opened as if it were a
-        finished result, even if someone guesses or reuses an id from elsewhere."""
+        finished result, even if someone guesses or reuses an id from elsewhere.
+
+        Deliberately does not select updated_at - see list_for_user above."""
         params = {
-            "select": "id,status,duration_seconds,translation,summary,created_at,updated_at",
+            "select": "id,status,duration_seconds,translation,summary,created_at",
             "id": f"eq.{meeting_id}", "status": "eq.completed",
         }
         if user_id:

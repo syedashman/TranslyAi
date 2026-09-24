@@ -96,19 +96,19 @@ class MeetingStatusResponse(BaseModel):
 
 class MeetingListItem(BaseModel):
     """One row in Meeting History - deliberately excludes translation/transcript (only a summary preview is
-    needed for the list; the full translation is fetched only when a specific meeting is opened)."""
+    needed for the list; the full translation is fetched only when a specific meeting is opened). No updated_at:
+    nothing reads it and not every deployed meetings table has that column."""
 
     id: str
     status: str
     duration_seconds: Optional[int] = None
     summary: Optional[str] = None
     created_at: str
-    updated_at: str
 
 
 class MeetingDetail(BaseModel):
     """A single saved meeting, opened from history. No transcript field, same as MeetingStatusResponse - stored
-    in Supabase, never returned here."""
+    in Supabase, never returned here. No updated_at, same reason as MeetingListItem above."""
 
     id: str
     status: str
@@ -116,4 +116,3 @@ class MeetingDetail(BaseModel):
     translation: Optional[str] = None
     summary: Optional[str] = None
     created_at: str
-    updated_at: str
