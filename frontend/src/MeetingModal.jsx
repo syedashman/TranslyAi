@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { CircleAlert, Copy, LoaderCircle, Mail, Mic, Pause, Play, Square, Users, X } from 'lucide-react';
+import { formatDuration } from './lib/duration';
 import { buildEmailBody, openGmailCompose } from './lib/email';
 import { describeError } from './lib/errors';
-import { getMeetingStatus, startMeeting } from './lib/meetingApi';
+import { getMeeting, getMeetingStatus, startMeeting } from './lib/meetingApi';
 
 // AbortController-based cancellation surfaces as a DOMException named 'AbortError' or axios' own 'CanceledError'.
 function isCancelError(error) {
@@ -21,6 +22,7 @@ const STAGE_LABEL = {
   transcribing: 'Transcribing your meeting...',
   translating: 'Translating the transcript...',
   summarizing: 'Generating the summary...',
+  'loading-saved': 'Loading saved meeting...',
 };
 
 function pickSupportedMimeType() {
@@ -28,22 +30,18 @@ function pickSupportedMimeType() {
   return CANDIDATE_MIME_TYPES.find((type) => MediaRecorder.isTypeSupported(type)) || '';
 }
 
-function formatDuration(totalSeconds) {
-  const total = Math.max(0, Math.floor(totalSeconds));
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const s = total % 60;
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${pad(h)}:${pad(m)}:${pad(s)}`;
-}
-
 // Self-contained: uses its own MediaRecorder refs, entirely separate from the short-voice recording flow in
 // App.jsx, so nothing here can interfere with that existing feature.
-export default function MeetingModal({ onClose, onCopy }) {
-  const [phase, setPhase] = useState('idle'); // idle | recording | paused | uploading | <server stage> | completed | error
+//
+// Two modes, chosen by whether `meetingId` is passed:
+// - no meetingId: the normal "Start Meeting" recording flow (unchanged).
+// - meetingId set: opens an already-saved meeting from history instead - fetches its stored translation/summary
+//   (GET /api/meetings/{id}, never ElevenLabs/Gemini again) and renders the exact same result view.
+export default function MeetingModal({ onClose, onCopy, onSaved, meetingId = null }) {
+  const [phase, setPhase] = useState(meetingId ? 'loading-saved' : 'idle');
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [error, setError] = useState('');
-  const [result, setResult] = useState(null); // { transcript, translation, summary }
+  const [result, setResult] = useState(null); // { translation, summary } - deliberately never a transcript field
   const [canPause, setCanPause] = useState(true);
 
   const recorderRef = useRef(null);
@@ -92,6 +90,26 @@ export default function MeetingModal({ onClose, onCopy }) {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [phase, onClose]);
+
+  // Saved-meeting mode: fetch the already-stored result once, instead of recording. No ElevenLabs/Gemini call
+  // happens here - this is a plain read of what the background job already saved to Supabase.
+  useEffect(() => {
+    if (!meetingId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const meeting = await getMeeting(meetingId);
+        if (cancelled) return;
+        setResult({ translation: meeting.translation || '', summary: meeting.summary || '' });
+        setPhase('completed');
+      } catch (fetchError) {
+        if (cancelled) return;
+        setError(describeError(fetchError, "Couldn't load that meeting. Please try again."));
+        setPhase('error');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [meetingId]);
 
   const startRecording = async () => {
     setError('');
@@ -177,17 +195,21 @@ export default function MeetingModal({ onClose, onCopy }) {
     }
   };
 
-  const pollStatus = (meetingId) => {
+  // Named jobId (not meetingId) to avoid shadowing the meetingId PROP used by saved-view mode above - this is
+  // always the id of a job just created by uploadAndProcess, never a previously-saved meeting being reopened.
+  const pollStatus = (jobId) => {
     const poll = async () => {
       if (closedRef.current) return;
       const controller = new AbortController();
       pollAbortRef.current = controller;
       try {
-        const status = await getMeetingStatus(meetingId, { signal: controller.signal });
+        const status = await getMeetingStatus(jobId, { signal: controller.signal });
         if (closedRef.current) return;
         if (status.status === 'completed') {
-          setResult({ transcript: status.transcript || '', translation: status.translation || '', summary: status.summary || '' });
+          // No transcript field is ever returned by the backend (see MeetingStatusResponse) - stored, never sent.
+          setResult({ translation: status.translation || '', summary: status.summary || '' });
           setPhase('completed');
+          onSaved?.();
           return;
         }
         if (status.status === 'failed') {
@@ -280,11 +302,16 @@ export default function MeetingModal({ onClose, onCopy }) {
             <p>{error || 'Something went wrong.'}</p>
             <div className="meeting-controls">
               {finalizedFileRef.current && <button type="button" className="meeting-secondary" onClick={retryUpload}>Retry upload</button>}
-              <button type="button" className="meeting-start-button" onClick={startOver}>Start a new meeting</button>
+              {meetingId
+                ? <button type="button" className="meeting-secondary" onClick={onClose}>Close</button>
+                : <button type="button" className="meeting-start-button" onClick={startOver}>Start a new meeting</button>}
             </div>
           </div>
         )}
 
+        {/* Deliberately no transcript here at all, saved-meeting view or freshly completed - only translation and
+            summary are ever shown; the transcript stays a backend/database-only record (see lib/meetingApi.js /
+            MeetingStatusResponse and MeetingDetail on the backend, neither of which even returns it). */}
         {phase === 'completed' && result && (
           <div className="meeting-result">
             <div className="meeting-result-actions">
@@ -299,11 +326,9 @@ export default function MeetingModal({ onClose, onCopy }) {
               <div className="summary-heading"><Users size={14} />Meeting summary</div>
               <p>{result.summary}</p>
             </div>
-            <details className="meeting-transcript">
-              <summary>Full transcript</summary>
-              <p>{result.transcript}</p>
-            </details>
-            <button type="button" className="meeting-secondary" onClick={startOver}>Start another meeting</button>
+            {meetingId
+              ? <button type="button" className="meeting-secondary" onClick={onClose}>Close</button>
+              : <button type="button" className="meeting-secondary" onClick={startOver}>Start another meeting</button>}
           </div>
         )}
       </div>

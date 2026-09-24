@@ -3,15 +3,19 @@ untouched. Requires login (same bearer-token pattern as saved chats) since a mee
 record rather than a one-off translation.
 """
 
+from typing import Awaitable, TypeVar
+
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 
 from app.routes import bearer_token
-from app.schemas import MeetingCreateResponse, MeetingStatusResponse
+from app.schemas import MeetingCreateResponse, MeetingDetail, MeetingListItem, MeetingStatusResponse
 from app.services.chat_store import user_id_from_token
 from app.services.meeting_jobs import create_job, get_job
 from app.services.meeting_processor import process_meeting
-from app.services.meeting_store import MeetingStore
+from app.services.meeting_store import MeetingStore, MeetingStoreError
 from app.services.speech import SpeechService
+
+T = TypeVar("T")
 
 router = APIRouter(prefix="/api/meetings", tags=["meetings"])
 
@@ -49,9 +53,36 @@ async def start_meeting(
 
 @router.get("/{meeting_id}/status", response_model=MeetingStatusResponse)
 async def meeting_status(meeting_id: str, token: str = Depends(bearer_token)):
-    """Current stage while processing, or the transcript/translation/summary once status is "completed" (or
-    error_message if status is "failed"). Only the meeting's own owner can read it."""
+    """Current stage while processing, or the translation/summary once status is "completed" (or error_message
+    if status is "failed"). Only the meeting's own owner can read it. This is the LIVE, in-memory job - it works
+    regardless of whether Supabase persistence (see the routes below) is configured or has caught up yet."""
     job = get_job(meeting_id)
     if job is None or job.get("user_id") is None or job["user_id"] != user_id_from_token(token):
         raise HTTPException(status_code=404, detail="Meeting not found.")
     return job
+
+
+async def _store_call(call: Awaitable[T]) -> T:
+    try:
+        return await call
+    except MeetingStoreError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.message) from error
+
+
+@router.get("", response_model=list[MeetingListItem])
+async def list_meetings(token: str = Depends(bearer_token)):
+    """Meeting History: this user's completed, saved meetings, newest first - reads Supabase directly (not the
+    in-memory job registry, which only holds whatever is still live in this process)."""
+    return await _store_call(MeetingStore.list_for_user(token, user_id_from_token(token)))
+
+
+@router.get("/{meeting_id}", response_model=MeetingDetail)
+async def get_meeting(meeting_id: str, token: str = Depends(bearer_token)):
+    """Opens one saved meeting from history - the already-stored translation/summary, never re-transcribed or
+    re-translated. Ownership is enforced both by row-level security and an explicit user_id filter (see
+    MeetingStore.get_for_user); anything else - someone else's meeting, or one that isn't status=completed - 404s
+    exactly like a private chat does, never a 403 that would confirm the id exists."""
+    meeting = await _store_call(MeetingStore.get_for_user(token, user_id_from_token(token), meeting_id))
+    if meeting is None:
+        raise HTTPException(status_code=404, detail="Meeting not found.")
+    return meeting

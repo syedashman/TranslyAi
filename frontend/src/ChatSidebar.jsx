@@ -2,11 +2,12 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Archive, ArchiveRestore, ChevronDown, ChevronRight, LoaderCircle, MessageCircle, MoreHorizontal,
-  PanelLeftClose, Pin, PinOff, Search, SquarePen, Trash2, X,
+  PanelLeftClose, Pin, PinOff, Search, SquarePen, Trash2, Users, X,
 } from 'lucide-react';
 import AccountMenu from './AccountMenu';
 import BrandMark from './BrandMark';
 import { CTA_LOGIN, CTA_SIGNUP } from './lib/authCta';
+import { formatDurationShort } from './lib/duration';
 
 const MENU_WIDTH = 190;
 
@@ -84,9 +85,33 @@ function ChatItem({ chat, active, withIcon, menuOpen, onSelect, onOpenMenu }) {
   );
 }
 
+// One saved meeting: date, duration, and a plain-text preview of its summary (bullets/markdown stripped) -
+// visually distinct from ChatItem (a mic icon instead of the chat bubble icon, no pin/archive/delete menu) so it
+// clearly reads as a meeting, not a translation chat.
+function MeetingItem({ meeting, onSelect }) {
+  const date = new Date(meeting.created_at);
+  const dateLabel = Number.isNaN(date.getTime())
+    ? ''
+    : date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  const preview = (meeting.summary || '').replace(/[•*]/g, '').replace(/\s+/g, ' ').trim();
+  return (
+    <button type="button" className="session-item meeting-item" onClick={() => onSelect(meeting.id)}>
+      <span className="session-icon"><Users size={16} /></span>
+      <span className="meeting-item-body">
+        <span className="meeting-item-meta">
+          {dateLabel}{meeting.duration_seconds != null && ` · ${formatDurationShort(meeting.duration_seconds)}`}
+        </span>
+        {preview && <span className="meeting-item-preview">"{preview.length > 90 ? `${preview.slice(0, 90).trimEnd()}...` : preview}"</span>}
+      </span>
+    </button>
+  );
+}
+
 export default function ChatSidebar({
   chats, loading, error, onRetry, activeId, isOpen, user, guest = false, onRequestAuth = () => {},
   onSignOut, onProfileChange, onNew, onSelect, onClose, onTogglePin, onToggleArchive, onDelete,
+  historyTab = 'translations', onHistoryTabChange = () => {}, meetings = [], meetingsLoading = false,
+  meetingsError = '', onRetryMeetings, onSelectMeeting = () => {},
 }) {
   const [query, setQuery] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
@@ -120,14 +145,21 @@ export default function ChatSidebar({
       <div className="sidebar-header">
         <div className="brand"><BrandMark /><span>TranslyAi</span></div>
         <div className="sidebar-header-actions">
-          <button type="button" className={`icon-button ${searchOpen ? 'active' : ''}`} onClick={toggleSearch} aria-label="Search chats" aria-pressed={searchOpen}><Search size={18} /></button>
+          {historyTab === 'translations' && (
+            <button type="button" className={`icon-button ${searchOpen ? 'active' : ''}`} onClick={toggleSearch} aria-label="Search chats" aria-pressed={searchOpen}><Search size={18} /></button>
+          )}
           <button type="button" className="icon-button" onClick={onClose} aria-label="Close sidebar"><PanelLeftClose size={18} /></button>
         </div>
       </div>
 
-      <button type="button" className="new-chat-button" onClick={onNew}><SquarePen size={17} />New chat</button>
+      <button type="button" className="new-chat-button" onClick={() => { onHistoryTabChange('translations'); onNew(); }}><SquarePen size={17} />New chat</button>
 
-      {searchOpen && (
+      <div className="history-tabs" role="tablist" aria-label="History type">
+        <button type="button" role="tab" aria-selected={historyTab === 'translations'} className={`history-tab ${historyTab === 'translations' ? 'active' : ''}`} onClick={() => onHistoryTabChange('translations')}>Translations</button>
+        <button type="button" role="tab" aria-selected={historyTab === 'meetings'} className={`history-tab ${historyTab === 'meetings' ? 'active' : ''}`} onClick={() => onHistoryTabChange('meetings')}>Meetings</button>
+      </div>
+
+      {historyTab === 'translations' && searchOpen && (
         <div className="sidebar-search">
           <Search size={14} />
           <input
@@ -139,28 +171,39 @@ export default function ChatSidebar({
         </div>
       )}
 
-      <nav className="session-list" aria-label="Chats">
-        {error && <div className="sidebar-error" role="alert">{error}{onRetry && <button type="button" onClick={onRetry}>Retry</button>}</div>}
-        {loading && !chats.length && <p className="empty-history sidebar-loading"><LoaderCircle size={14} className="spin" />Loading chats...</p>}
+      {historyTab === 'translations' ? (
+        <nav className="session-list" aria-label="Chats">
+          {error && <div className="sidebar-error" role="alert">{error}{onRetry && <button type="button" onClick={onRetry}>Retry</button>}</div>}
+          {loading && !chats.length && <p className="empty-history sidebar-loading"><LoaderCircle size={14} className="spin" />Loading chats...</p>}
 
-        {pinned.length > 0 && <div className="history-label">Pinned</div>}
-        {pinned.map((chat) => renderItem(chat, true))}
+          {pinned.length > 0 && <div className="history-label">Pinned</div>}
+          {pinned.map((chat) => renderItem(chat, true))}
 
-        {recent.length > 0 && <div className="history-label">Recents</div>}
-        {recent.map((chat) => renderItem(chat))}
+          {recent.length > 0 && <div className="history-label">Recents</div>}
+          {recent.map((chat) => renderItem(chat))}
 
-        {!loading && !error && !chats.length && <p className="empty-history">{guest ? 'Chats are saved when you sign up.' : 'Your saved chats will appear here.'}</p>}
-        {term && nothingMatches && <p className="empty-history">No chats match "{query.trim()}".</p>}
+          {!loading && !error && !chats.length && <p className="empty-history">{guest ? 'Chats are saved when you sign up.' : 'Your saved chats will appear here.'}</p>}
+          {term && nothingMatches && <p className="empty-history">No chats match "{query.trim()}".</p>}
 
-        {archived.length > 0 && (
-          <>
-            <button type="button" className="history-label archived-toggle" onClick={() => setArchivedOpen((open) => !open)} aria-expanded={Boolean(showArchived)}>
-              {showArchived ? <ChevronDown size={12} /> : <ChevronRight size={12} />}Archived ({archived.length})
-            </button>
-            {showArchived && archived.map((chat) => renderItem(chat))}
-          </>
-        )}
-      </nav>
+          {archived.length > 0 && (
+            <>
+              <button type="button" className="history-label archived-toggle" onClick={() => setArchivedOpen((open) => !open)} aria-expanded={Boolean(showArchived)}>
+                {showArchived ? <ChevronDown size={12} /> : <ChevronRight size={12} />}Archived ({archived.length})
+              </button>
+              {showArchived && archived.map((chat) => renderItem(chat))}
+            </>
+          )}
+        </nav>
+      ) : (
+        <nav className="session-list" aria-label="Meetings">
+          {meetingsError && <div className="sidebar-error" role="alert">{meetingsError}{onRetryMeetings && <button type="button" onClick={onRetryMeetings}>Retry</button>}</div>}
+          {meetingsLoading && !meetings.length && <p className="empty-history sidebar-loading"><LoaderCircle size={14} className="spin" />Loading meetings...</p>}
+          {meetings.map((meeting) => <MeetingItem key={meeting.id} meeting={meeting} onSelect={onSelectMeeting} />)}
+          {!meetingsLoading && !meetingsError && !meetings.length && (
+            <p className="empty-history">{guest ? 'Meetings are saved when you sign up.' : 'Meetings you record will appear here once processed.'}</p>
+          )}
+        </nav>
+      )}
 
       {menu && menuChat && (
         <ChatMenu chat={menuChat} anchor={menu.anchor} onClose={closeMenu} onTogglePin={onTogglePin} onToggleArchive={onToggleArchive} onDelete={onDelete} />

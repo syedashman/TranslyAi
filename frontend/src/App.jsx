@@ -19,6 +19,7 @@ import {
   createChat, deleteChat, deleteMessages, fetchMessages, fetchSharedChat, generateTitle, listChats, saveMessages,
   setArchived, setPinned, setShared, sortChats, toApiMessage, toUiMessage,
 } from './lib/chatApi';
+import { listMeetings } from './lib/meetingApi';
 
 const AUDIO_TIMEOUT_MS = 60000;
 const COLLAPSE_KEY = 'linguaai-sidebar-collapsed';
@@ -71,7 +72,12 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
   const [authPromptOpen, setAuthPromptOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null); // the chat waiting for delete confirmation
   const [shareOpen, setShareOpen] = useState(false);
-  const [meetingOpen, setMeetingOpen] = useState(false);
+  const [meetingOpen, setMeetingOpen] = useState(false); // "Start Meeting" - record a new one
+  const [viewingMeetingId, setViewingMeetingId] = useState(null); // a saved meeting opened from history
+  const [historyTab, setHistoryTab] = useState('translations'); // 'translations' | 'meetings' - sidebar switch
+  const [meetings, setMeetings] = useState([]);
+  const [meetingsLoading, setMeetingsLoading] = useState(true);
+  const [meetingsError, setMeetingsError] = useState('');
   const [editingId, setEditingId] = useState(null); // the user message being edited
   const [toast, setToast] = useState('');
   const toastTimerRef = useRef(null);
@@ -141,10 +147,21 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
     finally { setChatsLoading(false); }
   }, [guest]);
 
+  // Meeting History: a separate list from chats (see backend GET /api/meetings) - completed meetings only,
+  // newest first. Loaded alongside chats so the Meetings tab has data ready the moment it's opened.
+  const refreshMeetings = useCallback(async () => {
+    if (guest) { setMeetingsLoading(false); return; }
+    setMeetingsLoading(true); setMeetingsError('');
+    try { setMeetings(await listMeetings()); }
+    catch (loadError) { setMeetingsError(`Couldn't load your meetings. ${loadError.message}`); }
+    finally { setMeetingsLoading(false); }
+  }, [guest]);
+
   // On first load (including a hard refresh) reopen the chat named in the address bar - our own, or one shared
   // with us via its link; loadMessages() below falls back to a new chat only if that actually fails.
   useEffect(() => {
     refreshChats();
+    refreshMeetings();
     if (initialChatId) loadMessages(initialChatId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshChats]);
@@ -266,6 +283,10 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
     loadMessages(chatId);
   };
   const selectChat = (chatId) => openChat(chatId, 'push');
+
+  // Opens a saved meeting from history as an overlay (MeetingModal in "saved" mode) - the underlying chat, if
+  // any, stays exactly as it is underneath, same as the Share/Delete modals already work.
+  const selectMeeting = (meetingId) => { setSidebarOpen(false); setViewingMeetingId(meetingId); };
 
   const togglePin = async (chat) => {
     const next = !chat.is_pinned;
@@ -581,6 +602,9 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
         onSignOut={onSignOut} onProfileChange={onProfileChange}
         onNew={startNewChat} onSelect={selectChat} onClose={closeSidebar}
         onTogglePin={togglePin} onToggleArchive={toggleArchive} onDelete={setDeleteTarget}
+        historyTab={historyTab} onHistoryTabChange={setHistoryTab}
+        meetings={meetings} meetingsLoading={meetingsLoading} meetingsError={meetingsError}
+        onRetryMeetings={refreshMeetings} onSelectMeeting={selectMeeting}
       />
       {/* Mobile only (hidden by CSS on larger screens): tapping the dimmed page closes the open sidebar. */}
       {sidebarOpen && <div className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} aria-hidden="true" />}
@@ -664,7 +688,14 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
         />
       )}
       {toast && <div className="toast" role="status">{toast}</div>}
-      {meetingOpen && <MeetingModal onClose={() => setMeetingOpen(false)} onCopy={copyWithToast} />}
+      {(meetingOpen || viewingMeetingId) && (
+        <MeetingModal
+          meetingId={viewingMeetingId}
+          onClose={() => { setMeetingOpen(false); setViewingMeetingId(null); }}
+          onCopy={copyWithToast}
+          onSaved={refreshMeetings}
+        />
+      )}
       {deleteTarget && <DeleteModal chat={deleteTarget} onCancel={() => setDeleteTarget(null)} onConfirm={() => { const chat = deleteTarget; setDeleteTarget(null); removeChat(chat); }} />}
       {guest && authPromptOpen && <AuthPrompt limitReached={limitReached} onClose={() => setAuthPromptOpen(false)} onRequestAuth={onRequestAuth} />}
     </div>

@@ -39,11 +39,36 @@ export async function startMeeting(file, durationSeconds, { signal } = {}) {
 }
 
 // Current stage while processing (queued/transcribing/translating/summarizing), or the finished
-// transcript/translation/summary once status is "completed", or error_message if "failed".
+// translation/summary once status is "completed", or error_message if "failed". Never includes the transcript -
+// the backend's response model deliberately excludes it (stored, never sent to the frontend).
 export async function getMeetingStatus(meetingId, { signal } = {}) {
   const headers = await authHeader();
   try {
     const response = await axios.get(`${API_BASE_URL}/api/meetings/${meetingId}/status`, { headers, timeout: 30000, signal });
+    return response.data;
+  } catch (error) {
+    throw wrapError(error);
+  }
+}
+
+// This user's saved (completed-only) meetings, newest first, for the Meetings history tab. Lightweight rows -
+// no translation/transcript - just enough for a list preview (id, status, duration, summary, timestamps).
+export async function listMeetings({ signal } = {}) {
+  const headers = await authHeader();
+  try {
+    const response = await axios.get(`${API_BASE_URL}/api/meetings`, { headers, timeout: 30000, signal });
+    return response.data;
+  } catch (error) {
+    throw wrapError(error);
+  }
+}
+
+// One saved meeting's full stored translation + summary (never the transcript - see getMeetingStatus above).
+// A plain read of what the background job already saved; never re-transcribes or re-translates anything.
+export async function getMeeting(meetingId, { signal } = {}) {
+  const headers = await authHeader();
+  try {
+    const response = await axios.get(`${API_BASE_URL}/api/meetings/${meetingId}`, { headers, timeout: 30000, signal });
     return response.data;
   } catch (error) {
     throw wrapError(error);

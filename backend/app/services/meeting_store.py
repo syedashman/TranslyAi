@@ -20,6 +20,13 @@ import httpx
 from app.config import settings
 
 
+class MeetingStoreError(Exception):
+    def __init__(self, status_code: int, message: str):
+        super().__init__(message)
+        self.status_code = status_code
+        self.message = message
+
+
 class MeetingStore:
     _client: Optional[httpx.AsyncClient] = None
 
@@ -63,9 +70,10 @@ class MeetingStore:
 
     @classmethod
     async def upsert(cls, job: dict) -> None:
-        """Mirrors one job's current state. Silent no-op if the service role key isn't configured or the write
-        fails - callers must never let this raise, since it would abort the actual meeting pipeline over what is
-        only a durability nice-to-have."""
+        """Mirrors one job's current state - full transcript included, so the database keeps the complete
+        original record even though it is never sent back to the frontend (see schemas.py). Silent no-op if the
+        service role key isn't configured or the write fails - callers must never let this raise, since it would
+        abort the actual meeting pipeline over what is only a durability nice-to-have."""
         try:
             body = {
                 "id": job["id"],
@@ -80,3 +88,65 @@ class MeetingStore:
             await cls._request("POST", "/meetings", params={"on_conflict": "id"}, body=body)
         except Exception as error:
             print(f"MEETING STORE UPSERT FAILED (non-fatal): {error!r}")
+
+    # ---------- reads: the caller's OWN token, never the service-role key ----------
+    # A read is always a short-lived request (no token-expiry risk like the background job's writes have), so
+    # these go through the normal Supabase REST path with the user's access token - row-level security in
+    # supabase/meetings.sql (not this code) is what actually guarantees a user only ever sees their own rows.
+    # An explicit user_id filter is added too, the same defensive-not-RLS-alone pattern ChatStore.list_chats uses.
+
+    @classmethod
+    async def _request_as_user(cls, method: str, path: str, token: str, *, params: Optional[dict] = None) -> Any:
+        anon_key = settings.supabase_anon_key.strip()
+        if not settings.supabase_url.strip().startswith("http") or len(anon_key) < 20:
+            raise MeetingStoreError(503, "Meeting history is not configured on the server.")
+
+        headers = {"apikey": anon_key, "Authorization": f"Bearer {token}"}
+        try:
+            response = await cls._http().request(method, path, params=params, headers=headers)
+        except httpx.HTTPError as error:
+            print(f"MEETING STORE READ ERROR: {error!r}")
+            raise MeetingStoreError(502, "Could not reach the meeting database. Please try again.") from error
+
+        if response.status_code < 400:
+            return response.json() if response.content else None
+
+        print(f"MEETING STORE READ ERROR {response.status_code}: {response.text[:300]}")
+        if response.status_code == 401:
+            raise MeetingStoreError(401, "Your session has expired. Please log in again.")
+        if response.status_code == 404 or "PGRST205" in response.text or "does not exist" in response.text.lower():
+            raise MeetingStoreError(503, "Meeting history isn't set up yet. Run supabase/meetings.sql in the Supabase SQL Editor.")
+        raise MeetingStoreError(502, "The meeting database had a problem. Please try again.")
+
+    @classmethod
+    async def list_for_user(cls, token: str, user_id: Optional[str]) -> list[dict]:
+        """Completed meetings only, newest first - a failed or still-processing job is never listed as history
+        (see supabase/meetings.sql's status values). Soft-fails to an empty list (logged) rather than erroring the
+        whole sidebar - e.g. before supabase/meetings.sql has ever been run, "no history yet" and "not set up
+        yet" look the same to the user and neither should break the page.
+        """
+        params = {
+            "select": "id,status,duration_seconds,summary,created_at,updated_at",
+            "status": "eq.completed", "order": "created_at.desc",
+        }
+        if user_id:
+            params["user_id"] = f"eq.{user_id}"
+        try:
+            return await cls._request_as_user("GET", "/meetings", token, params=params) or []
+        except MeetingStoreError as error:
+            print(f"MEETING LIST SOFT-FAILED (showing empty history instead): {error.message}")
+            return []
+
+    @classmethod
+    async def get_for_user(cls, token: str, user_id: Optional[str], meeting_id: str) -> Optional[dict]:
+        """One completed meeting's full translation/summary (still never transcript - see schemas.MeetingDetail).
+        Only ever returns a status='completed' row: a failed/in-progress job's id can't be opened as if it were a
+        finished result, even if someone guesses or reuses an id from elsewhere."""
+        params = {
+            "select": "id,status,duration_seconds,translation,summary,created_at,updated_at",
+            "id": f"eq.{meeting_id}", "status": "eq.completed",
+        }
+        if user_id:
+            params["user_id"] = f"eq.{user_id}"
+        rows = await cls._request_as_user("GET", "/meetings", token, params=params)
+        return rows[0] if rows else None

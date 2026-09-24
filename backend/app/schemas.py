@@ -82,10 +82,38 @@ class MeetingCreateResponse(BaseModel):
 
 
 class MeetingStatusResponse(BaseModel):
+    """The live/in-progress job. transcript is deliberately NOT a field here: it's generated and stored (in the
+    in-memory job and, once completed, in Supabase) but is never sent to the frontend at all - response_model
+    filtering drops it even though the underlying job dict still carries it internally."""
+
     id: str
     status: str
     duration_seconds: Optional[int] = None
-    transcript: Optional[str] = None
     translation: Optional[str] = None
     summary: Optional[str] = None
     error_message: Optional[str] = None
+
+
+class MeetingListItem(BaseModel):
+    """One row in Meeting History - deliberately excludes translation/transcript (only a summary preview is
+    needed for the list; the full translation is fetched only when a specific meeting is opened)."""
+
+    id: str
+    status: str
+    duration_seconds: Optional[int] = None
+    summary: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+
+class MeetingDetail(BaseModel):
+    """A single saved meeting, opened from history. No transcript field, same as MeetingStatusResponse - stored
+    in Supabase, never returned here."""
+
+    id: str
+    status: str
+    duration_seconds: Optional[int] = None
+    translation: Optional[str] = None
+    summary: Optional[str] = None
+    created_at: str
+    updated_at: str
