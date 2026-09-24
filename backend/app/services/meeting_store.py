@@ -69,14 +69,23 @@ class MeetingStore:
         return response.json() if response.content else None
 
     @classmethod
-    async def upsert(cls, job: dict) -> None:
+    async def upsert(cls, job: dict) -> bool:
         """Mirrors one job's current state - full transcript included, so the database keeps the complete
-        original record even though it is never sent back to the frontend (see schemas.py). Silent no-op if the
-        service role key isn't configured or the write fails - callers must never let this raise, since it would
-        abort the actual meeting pipeline over what is only a durability nice-to-have."""
+        original record even though it is never sent back to the frontend (see schemas.py). Never raises -
+        callers must not have the actual meeting pipeline aborted over what is only a durability nice-to-have.
+
+        Returns True only if the row was actually written. False covers two different, clearly logged cases:
+        SUPABASE_SERVICE_ROLE_KEY isn't configured at all (expected/silent - the live in-memory result still
+        works), or the write was attempted and failed (a real problem - logged loudly so it's visible in Render
+        logs instead of looking identical to "not configured").
+        """
+        job_id = job.get("id")
+        if not cls.is_configured():
+            print(f"MEETING STORE UPSERT SKIPPED (no SUPABASE_SERVICE_ROLE_KEY configured): id={job_id}")
+            return False
         try:
             body = {
-                "id": job["id"],
+                "id": job_id,
                 "user_id": job.get("user_id"),
                 "status": job.get("status"),
                 "duration_seconds": job.get("duration_seconds"),
@@ -85,9 +94,16 @@ class MeetingStore:
                 "summary": job.get("summary"),
                 "error_message": job.get("error_message"),
             }
-            await cls._request("POST", "/meetings", params={"on_conflict": "id"}, body=body)
+            result = await cls._request("POST", "/meetings", params={"on_conflict": "id"}, body=body)
         except Exception as error:
-            print(f"MEETING STORE UPSERT FAILED (non-fatal): {error!r}")
+            print(f"MEETING STORE UPSERT FAILED (non-fatal, exception): id={job_id} error={error!r}")
+            return False
+        if result is None:
+            # _request already printed "MEETING STORE ERROR <status>: ..." above with the actual Supabase reason.
+            print(f"MEETING STORE UPSERT FAILED (non-fatal, see MEETING STORE ERROR above): id={job_id}")
+            return False
+        print(f"MEETING STORE UPSERT OK: id={job_id} status={job.get('status')}")
+        return True
 
     # ---------- reads: the caller's OWN token, never the service-role key ----------
     # A read is always a short-lived request (no token-expiry risk like the background job's writes have), so
