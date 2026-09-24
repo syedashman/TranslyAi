@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 import ChatSidebar from './ChatSidebar';
 import DeleteModal from './DeleteModal';
-import MeetingModal from './MeetingModal';
+import MeetingChat from './MeetingChat';
 import ShareModal from './ShareModal';
 import VoiceBar from './VoiceBar';
 import {
@@ -72,8 +72,11 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
   const [authPromptOpen, setAuthPromptOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null); // the chat waiting for delete confirmation
   const [shareOpen, setShareOpen] = useState(false);
-  const [meetingOpen, setMeetingOpen] = useState(false); // "Start Meeting" - record a new one
-  const [viewingMeetingId, setViewingMeetingId] = useState(null); // a saved meeting opened from history
+  // Meeting Chat: an inline mode of the chat area (not a modal) - null means normal chat/new-chat is showing.
+  // { id: null } = recording a new meeting; { id: <meetingId> } = viewing a saved one, read-only. The chat that
+  // was active before entering this mode (activeId/messages) is never touched, so closing it just reveals
+  // whatever was already there - no explicit "restore" step needed.
+  const [meetingView, setMeetingView] = useState(null);
   const [historyTab, setHistoryTab] = useState('translations'); // 'translations' | 'meetings' - sidebar switch
   const [meetings, setMeetings] = useState([]);
   const [meetingsLoading, setMeetingsLoading] = useState(true);
@@ -268,7 +271,10 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
     }
   };
 
+  // Explicitly choosing "New chat" is how the user leaves Meeting Chat mode to type again (point 9) - this is
+  // the ONLY place a fresh/empty chat is ever forced; closing Meeting Chat itself never calls this.
   const resetToNewChat = (urlMode) => {
+    setMeetingView(null);
     setActive(null, urlMode); setMessages([]); setMessagesLoading(false); setMessagesError('');
     setText(''); setAudioFile(null); setError(''); setSidebarOpen(false); setEditingId(null); setShareOpen(false);
     setGreeting((previous) => pickGreeting(previous));
@@ -277,6 +283,9 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
   const startNewChat = () => resetToNewChat('push');
 
   const openChat = (chatId, urlMode) => {
+    // Cleared unconditionally, before the "already active" early-return below - otherwise re-clicking the same
+    // chat that was active before Meeting Chat opened would return early and never leave meeting mode.
+    setMeetingView(null);
     setSidebarOpen(false);
     if (chatId === activeIdRef.current) return;
     setActive(chatId, urlMode); setMessages([]); setText(''); setAudioFile(null); setError(''); setEditingId(null); setShareOpen(false);
@@ -284,9 +293,10 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
   };
   const selectChat = (chatId) => openChat(chatId, 'push');
 
-  // Opens a saved meeting from history as an overlay (MeetingModal in "saved" mode) - the underlying chat, if
-  // any, stays exactly as it is underneath, same as the Share/Delete modals already work.
-  const selectMeeting = (meetingId) => { setSidebarOpen(false); setViewingMeetingId(meetingId); };
+  // Opens a saved meeting from history inline, in Meeting Chat's read-only mode - the chat that was active
+  // before this (activeId/messages), if any, is left completely untouched underneath, so closing just reveals it
+  // again; nothing here creates or selects a chat.
+  const selectMeeting = (meetingId) => { setSidebarOpen(false); setMeetingView({ id: meetingId }); };
 
   const togglePin = async (chat) => {
     const next = !chat.is_pinned;
@@ -616,10 +626,11 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
               the "Shared conversation" badge and the Log in/Sign up buttons at once, and they need to sit side by
               side instead of one (the absolutely-positioned auth buttons) covering the other. */}
           <div className="topbar-end">
-            {!guest && activeId && activeChat && (
+            {!meetingView && !guest && activeId && activeChat && (
               <button type="button" className="topbar-share" onClick={() => setShareOpen(true)} aria-label="Share chat"><Share size={16} />Share</button>
             )}
-            {isForeignChat && <span className="topbar-shared-badge">Shared conversation</span>}
+            {!meetingView && isForeignChat && <span className="topbar-shared-badge">Shared conversation</span>}
+            {meetingView && <span className="topbar-shared-badge">{meetingView.id ? 'Saved meeting' : 'Meeting'}</span>}
             {!user && (
               <div className="topbar-auth flex items-center gap-2">
                 <button type="button" className={CTA_LOGIN} onClick={() => onRequestAuth('login')}>Log in</button>
@@ -628,57 +639,69 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
             )}
           </div>
         </header>
-        <section className="conversation" aria-live="polite" ref={conversationRef}>
-          {messagesLoading
-            ? <div className="conversation-status"><LoaderCircle size={18} className="spin" />Loading conversation...</div>
-            : messagesError
-              ? <div className="conversation-status conversation-error">{messagesError}<button type="button" onClick={() => loadMessages(activeId)}>Try again</button></div>
-              : messages.length
-                ? messages.map((message) => (
-                  <Message
-                    key={message.id} message={message} editing={editingId === message.id} canEdit={!isRecording}
-                    onCopy={copyWithToast} onStartEdit={setEditingId} onCancelEdit={() => setEditingId(null)} onSubmitEdit={submitEdit}
+        {meetingView ? (
+          <MeetingChat
+            key={meetingView.id || 'record'}
+            meetingId={meetingView.id}
+            onClose={() => setMeetingView(null)}
+            onCopy={copyWithToast}
+            onSaved={refreshMeetings}
+          />
+        ) : (
+          <>
+            <section className="conversation" aria-live="polite" ref={conversationRef}>
+              {messagesLoading
+                ? <div className="conversation-status"><LoaderCircle size={18} className="spin" />Loading conversation...</div>
+                : messagesError
+                  ? <div className="conversation-status conversation-error">{messagesError}<button type="button" onClick={() => loadMessages(activeId)}>Try again</button></div>
+                  : messages.length
+                    ? messages.map((message) => (
+                      <Message
+                        key={message.id} message={message} editing={editingId === message.id} canEdit={!isRecording}
+                        onCopy={copyWithToast} onStartEdit={setEditingId} onCancelEdit={() => setEditingId(null)} onSubmitEdit={submitEdit}
+                      />
+                    ))
+                    : <EmptyState greeting={greeting} onPrompt={(prompt) => setText(prompt)} />}
+              {pending && pending.chatId === activeId && <Thinking />}
+            </section>
+            <div className="composer-wrap flex w-full flex-col items-center justify-center">
+              {/* One centred, responsive column holds the bar, banners and the disclaimer. */}
+              <div className="relative mx-auto w-full max-w-3xl px-4">
+                {limitReached && (
+                  <div className="guest-banner" role="alert">
+                    <span>Sign up or Log in to continue chatting with TranslyAi</span>
+                    <div><button type="button" onClick={() => onRequestAuth('login')}>Log in</button><button type="button" className="primary" onClick={() => onRequestAuth('signup')}>Sign up</button></div>
+                  </div>
+                )}
+                {isRecording && <VoiceBar stream={recordingStream} transcribing={isTranscribing} onCancel={cancelVoice} onConfirm={confirmVoice} />}
+                <form className="composer" onSubmit={submitText} hidden={isRecording}>
+                  {audioFile && <div className="attachment-chip"><Paperclip size={13} />{shortenFileName(audioFile.name)}<button type="button" onClick={() => setAudioFile(null)} aria-label="Remove attachment"><X size={13} /></button></div>}
+                  <textarea
+                    ref={textareaRef} value={text} rows={1} disabled={limitReached || isForeignChat} placeholder={limitReached ? 'Sign up or log in to continue chatting' : isForeignChat ? "You're viewing a shared conversation" : 'Message TranslyAi...'} aria-label="Message"
+                    onChange={(event) => { setText(event.target.value); resizeTextarea(event.target); }}
+                    onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submitText(event); } }}
                   />
-                ))
-                : <EmptyState greeting={greeting} onPrompt={(prompt) => setText(prompt)} />}
-          {pending && pending.chatId === activeId && <Thinking />}
-        </section>
-        <div className="composer-wrap flex w-full flex-col items-center justify-center">
-          {/* One centred, responsive column holds the bar, banners and the disclaimer. */}
-          <div className="relative mx-auto w-full max-w-3xl px-4">
-            {limitReached && (
-              <div className="guest-banner" role="alert">
-                <span>Sign up or Log in to continue chatting with TranslyAi</span>
-                <div><button type="button" onClick={() => onRequestAuth('login')}>Log in</button><button type="button" className="primary" onClick={() => onRequestAuth('signup')}>Sign up</button></div>
+                  <div className="composer-controls">
+                    <div className="composer-tools">
+                      <input ref={fileInputRef} type="file" accept="audio/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) { setAudioFile(file); setError(''); } event.target.value = ''; }} hidden />
+                      <button type="button" className="tool-button" onClick={() => fileInputRef.current?.click()} disabled={limitReached || isForeignChat} aria-label="Attach audio"><Paperclip size={18} /></button>
+                      <button type="button" className="tool-button" onClick={startRecording} disabled={limitReached || isForeignChat} aria-label="Record audio"><Mic size={18} /></button>
+                      {!guest && (
+                        <button type="button" className="tool-button" onClick={() => setMeetingView({ id: null })} disabled={isRecording} aria-label="Start meeting" title="Start Meeting"><Users size={18} /></button>
+                      )}
+                    </div>
+                    {/* The keys make React swap the two buttons instead of reusing one node, otherwise the Stop click would also submit the form as the node turns into the Send button. */}
+                    {isLoading
+                      ? <button key="stop" type="button" className="stop-button" onClick={stopGeneration} aria-label="Stop generating" title="Stop generating"><span className="stop-square" /></button>
+                      : <button key="send" type="submit" className="send-button" disabled={busy || limitReached || isForeignChat || (!text.trim() && !audioFile)} aria-label="Send message">{isSaving ? <LoaderCircle size={18} className="spin" /> : <ArrowUp size={18} />}</button>}
+                  </div>
+                </form>
+                {error && <div className="error-line error-toast" role="alert"><CircleAlert size={18} className="error-icon" /><span>{error}</span><button type="button" onClick={() => setError('')} aria-label="Dismiss message"><X size={14} /></button></div>}
+                <p className="composer-note mx-auto w-full text-center">{isForeignChat ? "You're viewing a shared conversation - start a new chat to reply. " : guest && !limitReached ? `Guest mode: ${freeLeft} free ${freeLeft === 1 ? 'message' : 'messages'} left. ` : ''}TranslyAi can make mistakes. Check important translations.</p>
               </div>
-            )}
-            {isRecording && <VoiceBar stream={recordingStream} transcribing={isTranscribing} onCancel={cancelVoice} onConfirm={confirmVoice} />}
-            <form className="composer" onSubmit={submitText} hidden={isRecording}>
-              {audioFile && <div className="attachment-chip"><Paperclip size={13} />{shortenFileName(audioFile.name)}<button type="button" onClick={() => setAudioFile(null)} aria-label="Remove attachment"><X size={13} /></button></div>}
-              <textarea
-                ref={textareaRef} value={text} rows={1} disabled={limitReached || isForeignChat} placeholder={limitReached ? 'Sign up or log in to continue chatting' : isForeignChat ? "You're viewing a shared conversation" : 'Message TranslyAi...'} aria-label="Message"
-                onChange={(event) => { setText(event.target.value); resizeTextarea(event.target); }}
-                onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submitText(event); } }}
-              />
-              <div className="composer-controls">
-                <div className="composer-tools">
-                  <input ref={fileInputRef} type="file" accept="audio/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) { setAudioFile(file); setError(''); } event.target.value = ''; }} hidden />
-                  <button type="button" className="tool-button" onClick={() => fileInputRef.current?.click()} disabled={limitReached || isForeignChat} aria-label="Attach audio"><Paperclip size={18} /></button>
-                  <button type="button" className="tool-button" onClick={startRecording} disabled={limitReached || isForeignChat} aria-label="Record audio"><Mic size={18} /></button>
-                  {!guest && (
-                    <button type="button" className="tool-button" onClick={() => setMeetingOpen(true)} disabled={isRecording} aria-label="Start meeting" title="Start Meeting"><Users size={18} /></button>
-                  )}
-                </div>
-                {/* The keys make React swap the two buttons instead of reusing one node, otherwise the Stop click would also submit the form as the node turns into the Send button. */}
-                {isLoading
-                  ? <button key="stop" type="button" className="stop-button" onClick={stopGeneration} aria-label="Stop generating" title="Stop generating"><span className="stop-square" /></button>
-                  : <button key="send" type="submit" className="send-button" disabled={busy || limitReached || isForeignChat || (!text.trim() && !audioFile)} aria-label="Send message">{isSaving ? <LoaderCircle size={18} className="spin" /> : <ArrowUp size={18} />}</button>}
-              </div>
-            </form>
-            {error && <div className="error-line error-toast" role="alert"><CircleAlert size={18} className="error-icon" /><span>{error}</span><button type="button" onClick={() => setError('')} aria-label="Dismiss message"><X size={14} /></button></div>}
-            <p className="composer-note mx-auto w-full text-center">{isForeignChat ? "You're viewing a shared conversation - start a new chat to reply. " : guest && !limitReached ? `Guest mode: ${freeLeft} free ${freeLeft === 1 ? 'message' : 'messages'} left. ` : ''}TranslyAi can make mistakes. Check important translations.</p>
-          </div>
-        </div>
+            </div>
+          </>
+        )}
       </main>
       {shareOpen && activeChat && (
         <ShareModal
@@ -688,14 +711,6 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
         />
       )}
       {toast && <div className="toast" role="status">{toast}</div>}
-      {(meetingOpen || viewingMeetingId) && (
-        <MeetingModal
-          meetingId={viewingMeetingId}
-          onClose={() => { setMeetingOpen(false); setViewingMeetingId(null); }}
-          onCopy={copyWithToast}
-          onSaved={refreshMeetings}
-        />
-      )}
       {deleteTarget && <DeleteModal chat={deleteTarget} onCancel={() => setDeleteTarget(null)} onConfirm={() => { const chat = deleteTarget; setDeleteTarget(null); removeChat(chat); }} />}
       {guest && authPromptOpen && <AuthPrompt limitReached={limitReached} onClose={() => setAuthPromptOpen(false)} onRequestAuth={onRequestAuth} />}
     </div>

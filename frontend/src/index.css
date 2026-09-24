@@ -484,9 +484,13 @@ button, textarea, select { font: inherit; } button { cursor: pointer; }
 .share-note { margin: 12px 2px 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
 @media (max-width: 480px) { .share-actions { grid-template-columns: repeat(2, 1fr); } }
 
-/* Meeting modal: reuses .modal/.modal-backdrop/.share-close and the message-card classes (.translation-card,
+/* Meeting Chat: an inline mode of the chat area (see App.jsx), not a modal - .meeting-chat reuses .conversation's
+   own width/padding/scroll (applied together as one element: className="conversation meeting-chat"), and each
+   phase block is capped to a comfortable reading width and centered within that, echoing the old modal's
+   proportions without a floating card. Reuses .share-close and the message-card classes (.translation-card,
    .summary-card, .result-heading, .mini-action) rather than inventing a parallel style for the same content. */
-.meeting-modal { width: min(100%, 560px); }
+.meeting-chat { display: flex; flex-direction: column; }
+.meeting-chat > * { width: 100%; max-width: 560px; margin-left: auto; margin-right: auto; }
 .meeting-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
 .meeting-head h2 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 18px; font-weight: 650; }
 .meeting-idle { display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 18px 4px 6px; text-align: center; }

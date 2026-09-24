@@ -1,4 +1,4 @@
-// Shared by the assistant-response action row (App.jsx) and the meeting result view (MeetingModal.jsx) - moved
+// Shared by the assistant-response action row (App.jsx) and the meeting result view (MeetingChat.jsx) - moved
 // here unchanged so both reuse the exact same Gmail-compose behavior instead of duplicating it.
 
 // Translation + summary, using exactly the values already shown on screen - nothing is regenerated or re-requested.

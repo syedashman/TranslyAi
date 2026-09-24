@@ -1,4 +1,4 @@
-// formatDuration: the live meeting timer's exact original format (MeetingModal) - always HH:MM:SS, unchanged.
+// formatDuration: the live meeting timer's exact original format (MeetingChat) - always HH:MM:SS, unchanged.
 export function formatDuration(totalSeconds) {
   const total = Math.max(0, Math.floor(totalSeconds));
   const h = Math.floor(total / 3600);

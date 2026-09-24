@@ -30,14 +30,15 @@ function pickSupportedMimeType() {
   return CANDIDATE_MIME_TYPES.find((type) => MediaRecorder.isTypeSupported(type)) || '';
 }
 
-// Self-contained: uses its own MediaRecorder refs, entirely separate from the short-voice recording flow in
-// App.jsx, so nothing here can interfere with that existing feature.
+// Meeting Chat: an inline mode of the chat area (rendered by App.jsx in place of the normal .conversation +
+// composer, not as an overlay) - self-contained, with its own MediaRecorder refs, entirely separate from the
+// short-voice recording flow in App.jsx, so nothing here can interfere with that existing feature.
 //
 // Two modes, chosen by whether `meetingId` is passed:
 // - no meetingId: the normal "Start Meeting" recording flow (unchanged).
 // - meetingId set: opens an already-saved meeting from history instead - fetches its stored translation/summary
-//   (GET /api/meetings/{id}, never ElevenLabs/Gemini again) and renders the exact same result view.
-export default function MeetingModal({ onClose, onCopy, onSaved, meetingId = null }) {
+//   (GET /api/meetings/{id}, never ElevenLabs/Gemini again) and renders the exact same result view, read-only.
+export default function MeetingChat({ onClose, onCopy, onSaved, meetingId = null }) {
   const [phase, setPhase] = useState(meetingId ? 'loading-saved' : 'idle');
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [error, setError] = useState('');
@@ -68,8 +69,8 @@ export default function MeetingModal({ onClose, onCopy, onSaved, meetingId = nul
     pollAbortRef.current = null;
   };
 
-  // Stop the mic and any in-flight polling if the modal is closed or the app navigates away mid-meeting - a
-  // recording must never keep running invisibly in the background.
+  // Stop the mic and any in-flight polling if Meeting Chat is closed (or App.jsx unmounts it, e.g. by
+  // navigating to a different chat) mid-meeting - a recording must never keep running invisibly in the background.
   useEffect(() => {
     closedRef.current = false;
     return () => {
@@ -81,15 +82,6 @@ export default function MeetingModal({ onClose, onCopy, onSaved, meetingId = nul
       if (recorder && recorder.state !== 'inactive') { try { recorder.stop(); } catch { /* already stopping */ } }
     };
   }, []);
-
-  // Same rule as the backdrop-click/X button below: can't be dismissed mid-recording or mid-processing, only
-  // "Stop Meeting" ends a recording, so Escape can't silently orphan or discard one.
-  useEffect(() => {
-    const isRecordingOrProcessing = phase === 'recording' || phase === 'paused' || phase === 'uploading' || Boolean(STAGE_LABEL[phase]);
-    const onKeyDown = (event) => { if (event.key === 'Escape' && !isRecordingOrProcessing) onClose(); };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [phase, onClose]);
 
   // Saved-meeting mode: fetch the already-stored result once, instead of recording. No ElevenLabs/Gemini call
   // happens here - this is a plain read of what the background job already saved to Supabase.
@@ -252,86 +244,83 @@ export default function MeetingModal({ onClose, onCopy, onSaved, meetingId = nul
 
   const isRecordingPhase = phase === 'recording' || phase === 'paused';
   const isProcessingPhase = phase === 'uploading' || Boolean(STAGE_LABEL[phase]);
+  // Can't be dismissed mid-recording or mid-processing - only "Stop Meeting" ends a recording, so the close
+  // button can't silently orphan or discard one (App.jsx also never unmounts this on its own during these phases).
   const canCloseFreely = !isRecordingPhase && !isProcessingPhase;
 
   return (
-    <div
-      className="modal-backdrop"
-      onMouseDown={(event) => { if (event.target === event.currentTarget && canCloseFreely) onClose(); }}
-    >
-      <div className="modal meeting-modal" role="dialog" aria-modal="true" aria-labelledby="meeting-title">
-        <div className="meeting-head">
-          <h2 id="meeting-title"><Users size={18} /> Meeting</h2>
-          {canCloseFreely && <button type="button" className="share-close" onClick={onClose} aria-label="Close"><X size={18} /></button>}
+    <section className="conversation meeting-chat" aria-live="polite">
+      <div className="meeting-head">
+        <h2><Users size={18} /> {meetingId ? 'Saved meeting' : 'Meeting'}</h2>
+        {canCloseFreely && <button type="button" className="share-close" onClick={onClose} aria-label="Close meeting chat" title="Close"><X size={18} /></button>}
+      </div>
+
+      {phase === 'idle' && (
+        <div className="meeting-idle">
+          <p>Record a meeting (roughly 30-100 minutes) and TranslyAI will transcribe, translate, and summarize it once you stop. Typing is turned off while a meeting is open - use Stop Meeting or Close to type again.</p>
+          {error && <p className="meeting-error-line"><CircleAlert size={14} />{error}</p>}
+          <button type="button" className="meeting-start-button" onClick={startRecording}><Mic size={16} />Start Meeting</button>
         </div>
+      )}
 
-        {phase === 'idle' && (
-          <div className="meeting-idle">
-            <p>Record a meeting (roughly 30-100 minutes) and TranslyAI will transcribe, translate, and summarize it once you stop.</p>
-            {error && <p className="meeting-error-line"><CircleAlert size={14} />{error}</p>}
-            <button type="button" className="meeting-start-button" onClick={startRecording}><Mic size={16} />Start Meeting</button>
+      {isRecordingPhase && (
+        <div className="meeting-recording">
+          <div className={`meeting-rec-dot ${phase === 'recording' ? 'is-live' : 'is-paused'}`} aria-hidden="true" />
+          <div className="meeting-timer">{formatDuration(elapsedSeconds)}</div>
+          <div className="meeting-rec-status">{phase === 'recording' ? 'Recording...' : 'Paused'}</div>
+          <div className="meeting-controls">
+            {phase === 'recording'
+              ? <button type="button" className="meeting-secondary" onClick={pauseRecording} disabled={!canPause}><Pause size={16} />Pause</button>
+              : <button type="button" className="meeting-secondary" onClick={resumeRecording}><Play size={16} />Resume</button>}
+            <button type="button" className="meeting-stop-button" onClick={stopRecording}><Square size={14} />Stop Meeting</button>
           </div>
-        )}
+          {!canPause && <p className="meeting-hint">Pause/resume isn't supported in this browser - Stop Meeting still works.</p>}
+        </div>
+      )}
 
-        {isRecordingPhase && (
-          <div className="meeting-recording">
-            <div className={`meeting-rec-dot ${phase === 'recording' ? 'is-live' : 'is-paused'}`} aria-hidden="true" />
-            <div className="meeting-timer">{formatDuration(elapsedSeconds)}</div>
-            <div className="meeting-rec-status">{phase === 'recording' ? 'Recording...' : 'Paused'}</div>
-            <div className="meeting-controls">
-              {phase === 'recording'
-                ? <button type="button" className="meeting-secondary" onClick={pauseRecording} disabled={!canPause}><Pause size={16} />Pause</button>
-                : <button type="button" className="meeting-secondary" onClick={resumeRecording}><Play size={16} />Resume</button>}
-              <button type="button" className="meeting-stop-button" onClick={stopRecording}><Square size={14} />Stop Meeting</button>
-            </div>
-            {!canPause && <p className="meeting-hint">Pause/resume isn't supported in this browser - Stop Meeting still works.</p>}
-          </div>
-        )}
+      {isProcessingPhase && (
+        <div className="meeting-processing">
+          <LoaderCircle size={28} className="spin" />
+          <p className="meeting-stage">{STAGE_LABEL[phase] || 'Uploading your recording...'}</p>
+          <p className="meeting-hint">Your meeting is being processed. This may take a few minutes.</p>
+        </div>
+      )}
 
-        {isProcessingPhase && (
-          <div className="meeting-processing">
-            <LoaderCircle size={28} className="spin" />
-            <p className="meeting-stage">{STAGE_LABEL[phase] || 'Uploading your recording...'}</p>
-            <p className="meeting-hint">Your meeting is being processed. This may take a few minutes.</p>
-          </div>
-        )}
-
-        {phase === 'error' && (
-          <div className="meeting-error">
-            <CircleAlert size={22} />
-            <p>{error || 'Something went wrong.'}</p>
-            <div className="meeting-controls">
-              {finalizedFileRef.current && <button type="button" className="meeting-secondary" onClick={retryUpload}>Retry upload</button>}
-              {meetingId
-                ? <button type="button" className="meeting-secondary" onClick={onClose}>Close</button>
-                : <button type="button" className="meeting-start-button" onClick={startOver}>Start a new meeting</button>}
-            </div>
-          </div>
-        )}
-
-        {/* Deliberately no transcript here at all, saved-meeting view or freshly completed - only translation and
-            summary are ever shown; the transcript stays a backend/database-only record (see lib/meetingApi.js /
-            MeetingStatusResponse and MeetingDetail on the backend, neither of which even returns it). */}
-        {phase === 'completed' && result && (
-          <div className="meeting-result">
-            <div className="meeting-result-actions">
-              <button type="button" className="mini-action" aria-label="Copy meeting result" title="Copy" onClick={copyAll}><Copy size={14} /></button>
-              <button type="button" className="mini-action" aria-label="Email meeting result" title="Email" onClick={emailAll}><Mail size={14} /></button>
-            </div>
-            <div className="translation-card">
-              <div className="result-heading"><span>English translation</span></div>
-              {result.translation.split(/\n{2,}/).filter(Boolean).map((paragraph, index) => <p key={index}>{paragraph}</p>)}
-            </div>
-            <div className="summary-card">
-              <div className="summary-heading"><Users size={14} />Meeting summary</div>
-              <p>{result.summary}</p>
-            </div>
+      {phase === 'error' && (
+        <div className="meeting-error">
+          <CircleAlert size={22} />
+          <p>{error || 'Something went wrong.'}</p>
+          <div className="meeting-controls">
+            {finalizedFileRef.current && <button type="button" className="meeting-secondary" onClick={retryUpload}>Retry upload</button>}
             {meetingId
               ? <button type="button" className="meeting-secondary" onClick={onClose}>Close</button>
-              : <button type="button" className="meeting-secondary" onClick={startOver}>Start another meeting</button>}
+              : <button type="button" className="meeting-start-button" onClick={startOver}>Start a new meeting</button>}
           </div>
-        )}
-      </div>
-    </div>
+        </div>
+      )}
+
+      {/* Deliberately no transcript here at all, saved-meeting view or freshly completed - only translation and
+          summary are ever shown; the transcript stays a backend/database-only record (see lib/meetingApi.js /
+          MeetingStatusResponse and MeetingDetail on the backend, neither of which even returns it). */}
+      {phase === 'completed' && result && (
+        <div className="meeting-result">
+          <div className="meeting-result-actions">
+            <button type="button" className="mini-action" aria-label="Copy meeting result" title="Copy" onClick={copyAll}><Copy size={14} /></button>
+            <button type="button" className="mini-action" aria-label="Email meeting result" title="Email" onClick={emailAll}><Mail size={14} /></button>
+          </div>
+          <div className="translation-card">
+            <div className="result-heading"><span>English translation</span></div>
+            {result.translation.split(/\n{2,}/).filter(Boolean).map((paragraph, index) => <p key={index}>{paragraph}</p>)}
+          </div>
+          <div className="summary-card">
+            <div className="summary-heading"><Users size={14} />Meeting summary</div>
+            <p>{result.summary}</p>
+          </div>
+          {meetingId
+            ? <button type="button" className="meeting-secondary" onClick={onClose}>Close</button>
+            : <button type="button" className="meeting-secondary" onClick={startOver}>Start another meeting</button>}
+        </div>
+      )}
+    </section>
   );
 }
