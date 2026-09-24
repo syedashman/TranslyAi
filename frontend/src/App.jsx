@@ -19,7 +19,9 @@ import {
   createChat, deleteChat, deleteMessages, fetchMessages, fetchSharedChat, generateTitle, listChats, saveMessages,
   setArchived, setPinned, setShared, sortChats, toApiMessage, toUiMessage,
 } from './lib/chatApi';
-import { listMeetings } from './lib/meetingApi';
+import {
+  createMeetingChat, deleteMeetingChat, listMeetingChats, setMeetingChatArchived, setMeetingChatPinned,
+} from './lib/meetingApi';
 
 const AUDIO_TIMEOUT_MS = 60000;
 const COLLAPSE_KEY = 'linguaai-sidebar-collapsed';
@@ -73,14 +75,16 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
   const [deleteTarget, setDeleteTarget] = useState(null); // the chat waiting for delete confirmation
   const [shareOpen, setShareOpen] = useState(false);
   // Meeting Chat: an inline mode of the chat area (not a modal) - null means normal chat/new-chat is showing.
-  // { id: null } = recording a new meeting; { id: <meetingId> } = viewing a saved one, read-only. The chat that
-  // was active before entering this mode (activeId/messages) is never touched, so closing it just reveals
-  // whatever was already there - no explicit "restore" step needed.
+  // { chatId: null } = a brand-new, not-yet-saved Meeting Chat (idle, nothing recorded into it yet);
+  // { chatId: <id> } = a Meeting Chat that exists in the sidebar (either just created by the first recording, or
+  // reopened from history) - MeetingChat.jsx then fetches and shows every result already saved inside it. The
+  // normal chat that was active before entering this mode (activeId/messages) is never touched, so leaving
+  // Meeting Chat mode just reveals whatever was already there - no explicit "restore" step needed.
   const [meetingView, setMeetingView] = useState(null);
   const [historyTab, setHistoryTab] = useState('translations'); // 'translations' | 'meetings' - sidebar switch
-  const [meetings, setMeetings] = useState([]);
-  const [meetingsLoading, setMeetingsLoading] = useState(true);
-  const [meetingsError, setMeetingsError] = useState('');
+  const [meetingChats, setMeetingChats] = useState([]);
+  const [meetingChatsLoading, setMeetingChatsLoading] = useState(true);
+  const [meetingChatsError, setMeetingChatsError] = useState('');
   const [editingId, setEditingId] = useState(null); // the user message being edited
   const [toast, setToast] = useState('');
   const toastTimerRef = useRef(null);
@@ -138,6 +142,7 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
 
   const setActive = (id, urlMode = 'push') => { activeIdRef.current = id; setActiveIdState(id); writeChatIdToUrl(id, urlMode); };
   const patchChat = (id, changes) => setChats((current) => sortChats(current.map((chat) => (chat.id === id ? { ...chat, ...changes } : chat))));
+  const patchMeetingChat = (id, changes) => setMeetingChats((current) => sortChats(current.map((chat) => (chat.id === id ? { ...chat, ...changes } : chat))));
 
   const refreshChats = useCallback(async () => {
     if (guest) { setChatsLoading(false); return; } // guests have no saved chats
@@ -150,21 +155,22 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
     finally { setChatsLoading(false); }
   }, [guest]);
 
-  // Meeting History: a separate list from chats (see backend GET /api/meetings) - completed meetings only,
-  // newest first. Loaded alongside chats so the Meetings tab has data ready the moment it's opened.
-  const refreshMeetings = useCallback(async () => {
-    if (guest) { setMeetingsLoading(false); return; }
-    setMeetingsLoading(true); setMeetingsError('');
-    try { setMeetings(await listMeetings()); }
-    catch (loadError) { setMeetingsError(`Couldn't load your meetings. ${loadError.message}`); }
-    finally { setMeetingsLoading(false); }
+  // Meeting Chats: a separate list from chats (see backend GET /api/meeting-chats) - same shape and same
+  // pin/archive/delete behavior as normal chats, just its own table (see supabase/meeting_chats.sql). Loaded
+  // alongside chats so the Meetings tab has data ready the moment it's opened.
+  const refreshMeetingChats = useCallback(async () => {
+    if (guest) { setMeetingChatsLoading(false); return; }
+    setMeetingChatsLoading(true); setMeetingChatsError('');
+    try { setMeetingChats(sortChats(await listMeetingChats())); }
+    catch (loadError) { setMeetingChatsError(`Couldn't load your meetings. ${loadError.message}`); }
+    finally { setMeetingChatsLoading(false); }
   }, [guest]);
 
   // On first load (including a hard refresh) reopen the chat named in the address bar - our own, or one shared
   // with us via its link; loadMessages() below falls back to a new chat only if that actually fails.
   useEffect(() => {
     refreshChats();
-    refreshMeetings();
+    refreshMeetingChats();
     if (initialChatId) loadMessages(initialChatId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshChats]);
@@ -293,10 +299,60 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
   };
   const selectChat = (chatId) => openChat(chatId, 'push');
 
-  // Opens a saved meeting from history inline, in Meeting Chat's read-only mode - the chat that was active
-  // before this (activeId/messages), if any, is left completely untouched underneath, so closing just reveals it
-  // again; nothing here creates or selects a chat.
-  const selectMeeting = (meetingId) => { setSidebarOpen(false); setMeetingView({ id: meetingId }); };
+  // Opens an existing Meeting Chat inline, showing every result already saved inside it - the normal chat that
+  // was active before this (activeId/messages), if any, is left completely untouched underneath, so leaving
+  // Meeting Chat mode just reveals it again.
+  const selectMeetingChat = (chatId) => { setSidebarOpen(false); setMeetingView({ chatId }); };
+
+  // "New chat" while the Meetings tab is selected (point 5): opens a brand-new, empty Meeting Chat - nothing is
+  // saved to the backend yet (see MeetingChat.jsx's chatId=null idle state); the chat only starts existing once
+  // the first recording completes, exactly like a new Translation chat only exists once its first message is sent.
+  const startNewMeetingChat = () => {
+    setSidebarOpen(false);
+    setMeetingView({ chatId: null });
+  };
+
+  const toggleMeetingChatPin = async (chat) => {
+    const next = !chat.is_pinned;
+    setError(''); patchMeetingChat(chat.id, { is_pinned: next });
+    try { patchMeetingChat(chat.id, await setMeetingChatPinned(chat.id, next)); }
+    catch (actionError) { patchMeetingChat(chat.id, { is_pinned: chat.is_pinned }); setError(`Couldn't ${next ? 'pin' : 'unpin'} the meeting chat. ${actionError.message}`); }
+  };
+
+  const toggleMeetingChatArchive = async (chat) => {
+    const next = !chat.is_archived;
+    setError(''); patchMeetingChat(chat.id, { is_archived: next, is_pinned: next ? false : chat.is_pinned });
+    try { patchMeetingChat(chat.id, await setMeetingChatArchived(chat.id, next)); }
+    catch (actionError) {
+      patchMeetingChat(chat.id, { is_archived: chat.is_archived, is_pinned: chat.is_pinned });
+      setError(`Couldn't ${next ? 'archive' : 'unarchive'} the meeting chat. ${actionError.message}`);
+    }
+  };
+
+  // Deleting a Meeting Chat removes it AND every meeting result saved inside it (the backend cascades via the
+  // meeting_chat_id foreign key - see supabase/meeting_chats.sql) - never just hides one result.
+  const removeMeetingChat = async (chat) => {
+    setError('');
+    setMeetingChats((current) => current.filter((item) => item.id !== chat.id));
+    if (meetingView?.chatId === chat.id) setMeetingView(null);
+    try { await deleteMeetingChat(chat.id); }
+    catch (actionError) { setError(`Couldn't delete the meeting chat. ${actionError.message}`); refreshMeetingChats(); }
+  };
+
+  // Called by MeetingChat.jsx once the very first recording of a brand-new chat completes and the backend has
+  // assigned it a real id - adds it to the sidebar immediately (optimistic; refreshMeetingChats below reconciles
+  // it) and keeps Meeting Chat mode pointed at that same chat so later recordings in this session attach to it.
+  const handleMeetingChatCreated = (chatId) => {
+    setMeetingView({ chatId });
+    setMeetingChats((current) => (current.some((chat) => chat.id === chatId) ? current : sortChats([
+      { id: chatId, title: 'New meeting', is_pinned: false, is_archived: false, created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+      ...current,
+    ])));
+  };
+
+  // Called after every completed recording (new chat or existing one) - refreshes the sidebar so ordering and
+  // (once ready) the AI-generated title stay in sync with the backend.
+  const handleMeetingResultSaved = () => { refreshMeetingChats(); };
 
   const togglePin = async (chat) => {
     const next = !chat.is_pinned;
@@ -613,8 +669,11 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
         onNew={startNewChat} onSelect={selectChat} onClose={closeSidebar}
         onTogglePin={togglePin} onToggleArchive={toggleArchive} onDelete={setDeleteTarget}
         historyTab={historyTab} onHistoryTabChange={setHistoryTab}
-        meetings={meetings} meetingsLoading={meetingsLoading} meetingsError={meetingsError}
-        onRetryMeetings={refreshMeetings} onSelectMeeting={selectMeeting}
+        meetings={meetingChats} meetingsLoading={meetingChatsLoading} meetingsError={meetingChatsError}
+        onRetryMeetings={refreshMeetingChats} activeMeetingChatId={meetingView?.chatId ?? null}
+        onNewMeeting={startNewMeetingChat} onSelectMeeting={selectMeetingChat}
+        onToggleMeetingPin={toggleMeetingChatPin} onToggleMeetingArchive={toggleMeetingChatArchive}
+        onDeleteMeeting={removeMeetingChat}
       />
       {/* Mobile only (hidden by CSS on larger screens): tapping the dimmed page closes the open sidebar. */}
       {sidebarOpen && <div className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} aria-hidden="true" />}
@@ -630,7 +689,7 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
               <button type="button" className="topbar-share" onClick={() => setShareOpen(true)} aria-label="Share chat"><Share size={16} />Share</button>
             )}
             {!meetingView && isForeignChat && <span className="topbar-shared-badge">Shared conversation</span>}
-            {meetingView && <span className="topbar-shared-badge">{meetingView.id ? 'Saved meeting' : 'Meeting'}</span>}
+            {meetingView && <span className="topbar-shared-badge">Meeting</span>}
             {!user && (
               <div className="topbar-auth flex items-center gap-2">
                 <button type="button" className={CTA_LOGIN} onClick={() => onRequestAuth('login')}>Log in</button>
@@ -641,11 +700,11 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
         </header>
         {meetingView ? (
           <MeetingChat
-            key={meetingView.id || 'record'}
-            meetingId={meetingView.id}
-            onClose={() => setMeetingView(null)}
+            key={meetingView.chatId || 'new-meeting'}
+            chatId={meetingView.chatId}
             onCopy={copyWithToast}
-            onSaved={refreshMeetings}
+            onChatCreated={handleMeetingChatCreated}
+            onResultSaved={handleMeetingResultSaved}
           />
         ) : (
           <>
@@ -687,7 +746,7 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
                       <button type="button" className="tool-button" onClick={() => fileInputRef.current?.click()} disabled={limitReached || isForeignChat} aria-label="Attach audio"><Paperclip size={18} /></button>
                       <button type="button" className="tool-button" onClick={startRecording} disabled={limitReached || isForeignChat} aria-label="Record audio"><Mic size={18} /></button>
                       {!guest && (
-                        <button type="button" className="tool-button" onClick={() => setMeetingView({ id: null })} disabled={isRecording} aria-label="Start meeting" title="Start Meeting"><Users size={18} /></button>
+                        <button type="button" className="tool-button" onClick={startNewMeetingChat} disabled={isRecording} aria-label="Start meeting" title="Start Meeting"><Users size={18} /></button>
                       )}
                     </div>
                     {/* The keys make React swap the two buttons instead of reusing one node, otherwise the Stop click would also submit the form as the node turns into the Send button. */}

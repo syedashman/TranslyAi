@@ -87,6 +87,7 @@ class MeetingStore:
             body = {
                 "id": job_id,
                 "user_id": job.get("user_id"),
+                "meeting_chat_id": job.get("meeting_chat_id"),
                 "status": job.get("status"),
                 "duration_seconds": job.get("duration_seconds"),
                 "transcript": job.get("transcript"),

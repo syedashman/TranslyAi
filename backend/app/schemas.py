@@ -76,9 +76,25 @@ class SharedChatView(BaseModel):
     messages: list[MessageOut]
 
 
+class MeetingChatOut(BaseModel):
+    """A Meeting Chat: the persistent container a "Start Meeting" recording is saved into (see
+    supabase/meeting_chats.sql). Shaped exactly like ChatOut (minus is_shared, which meetings don't support) so
+    the frontend can reuse the same sidebar list item/pin/archive/delete UI for both."""
+
+    id: str
+    title: str
+    is_pinned: bool
+    is_archived: bool
+    created_at: str
+    updated_at: str
+
+
 class MeetingCreateResponse(BaseModel):
     id: str
     status: str
+    # The Meeting Chat this recording was (or was just, if none was given) saved into - the frontend always needs
+    # this, even for a brand-new chat it didn't create itself first (see meeting_routes.start_meeting).
+    meeting_chat_id: str
 
 
 class MeetingStatusResponse(BaseModel):

@@ -4,8 +4,10 @@ from app.services.textclean import to_plain_title
 
 class TitleService:
     default_title = "New chat"
-    # Titles that mean "not named yet": ours, and the default many chat tables already use.
-    untitled = ("new chat", "new conversation", "untitled", "")
+    # Titles that mean "not named yet": ours, and the default many chat tables already use. "new meeting" is
+    # meeting_chats' own default (see supabase/meeting_chats.sql) - included so a Meeting Chat's title also gets
+    # generated exactly once, the same way a normal chat's does.
+    untitled = ("new chat", "new conversation", "new meeting", "untitled", "")
 
     @classmethod
     def is_untitled(cls, title: str) -> bool:

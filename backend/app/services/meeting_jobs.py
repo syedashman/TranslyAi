@@ -28,11 +28,12 @@ def _evict_oldest_if_full() -> None:
     _JOBS.pop(oldest_id, None)
 
 
-def create_job(user_id: Optional[str], duration_seconds: Optional[int]) -> dict:
+def create_job(user_id: Optional[str], duration_seconds: Optional[int], meeting_chat_id: Optional[str] = None) -> dict:
     _evict_oldest_if_full()
     job = {
         "id": str(uuid.uuid4()),
         "user_id": user_id,
+        "meeting_chat_id": meeting_chat_id,
         "status": "queued",
         "duration_seconds": duration_seconds,
         "transcript": None,

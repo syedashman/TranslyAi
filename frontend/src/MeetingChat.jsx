@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { CircleAlert, Copy, LoaderCircle, Mail, Mic, Pause, Play, Square, Users, X } from 'lucide-react';
+import { CircleAlert, Copy, LoaderCircle, Mail, Mic, Pause, Play, Square, Users } from 'lucide-react';
 import { formatDuration } from './lib/duration';
 import { buildEmailBody, openGmailCompose } from './lib/email';
 import { describeError } from './lib/errors';
-import { getMeeting, getMeetingStatus, startMeeting } from './lib/meetingApi';
+import {
+  generateMeetingChatTitle, getMeetingStatus, listMeetingChatResults, startMeeting,
+} from './lib/meetingApi';
 
 // AbortController-based cancellation surfaces as a DOMException named 'AbortError' or axios' own 'CanceledError'.
 function isCancelError(error) {
@@ -22,7 +24,6 @@ const STAGE_LABEL = {
   transcribing: 'Transcribing your meeting...',
   translating: 'Translating the transcript...',
   summarizing: 'Generating the summary...',
-  'loading-saved': 'Loading saved meeting...',
 };
 
 function pickSupportedMimeType() {
@@ -30,19 +31,50 @@ function pickSupportedMimeType() {
   return CANDIDATE_MIME_TYPES.find((type) => MediaRecorder.isTypeSupported(type)) || '';
 }
 
+// One saved result inside the Meeting Chat's timeline - Translation + Summary only, same Copy/Email behavior as
+// the live "just completed" card had before. Never renders a transcript (the backend never even sends one).
+function MeetingResultCard({ result, onCopy }) {
+  const copyAll = () => onCopy(buildEmailBody(result.translation, result.summary), 'Meeting result copied');
+  const emailAll = () => openGmailCompose('TranslyAI Meeting', buildEmailBody(result.translation, result.summary));
+  return (
+    <div className="meeting-result">
+      <div className="meeting-result-actions">
+        <button type="button" className="mini-action" aria-label="Copy meeting result" title="Copy" onClick={copyAll}><Copy size={14} /></button>
+        <button type="button" className="mini-action" aria-label="Email meeting result" title="Email" onClick={emailAll}><Mail size={14} /></button>
+      </div>
+      <div className="translation-card">
+        <div className="result-heading"><span>English translation</span></div>
+        {result.translation.split(/\n{2,}/).filter(Boolean).map((paragraph, index) => <p key={index}>{paragraph}</p>)}
+      </div>
+      <div className="summary-card">
+        <div className="summary-heading"><Users size={14} />Meeting summary</div>
+        <p>{result.summary}</p>
+      </div>
+    </div>
+  );
+}
+
 // Meeting Chat: an inline mode of the chat area (rendered by App.jsx in place of the normal .conversation +
 // composer, not as an overlay) - self-contained, with its own MediaRecorder refs, entirely separate from the
 // short-voice recording flow in App.jsx, so nothing here can interfere with that existing feature.
 //
-// Two modes, chosen by whether `meetingId` is passed:
-// - no meetingId: the normal "Start Meeting" recording flow (unchanged).
-// - meetingId set: opens an already-saved meeting from history instead - fetches its stored translation/summary
-//   (GET /api/meetings/{id}, never ElevenLabs/Gemini again) and renders the exact same result view, read-only.
-export default function MeetingChat({ onClose, onCopy, onSaved, meetingId = null }) {
-  const [phase, setPhase] = useState(meetingId ? 'loading-saved' : 'idle');
+// A Meeting Chat is a persistent container that can hold multiple recordings: this shows every previously saved
+// result in order, with a "Start Meeting" control always available at the bottom to record another one into the
+// SAME chat. There is deliberately no close/X button here - leaving Meeting Chat mode only happens by picking a
+// different chat or starting a new one from the sidebar (see App.jsx's openChat/resetToNewChat).
+//
+// chatId is null only for a brand-new, not-yet-saved Meeting Chat (the empty "Start Meeting" state right after
+// clicking "New chat" on the Meetings tab) - the very first recording gets the backend to create the chat, and
+// onChatCreated tells App.jsx the new id so later recordings in the same session attach to it instead of each
+// creating their own new chat.
+export default function MeetingChat({ chatId = null, onCopy, onChatCreated, onResultSaved }) {
+  const [results, setResults] = useState([]);
+  const [resultsLoading, setResultsLoading] = useState(Boolean(chatId));
+  const [resultsError, setResultsError] = useState('');
+  const [reloadTick, setReloadTick] = useState(0);
+  const [phase, setPhase] = useState('idle');
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [error, setError] = useState('');
-  const [result, setResult] = useState(null); // { translation, summary } - deliberately never a transcript field
   const [canPause, setCanPause] = useState(true);
 
   const recorderRef = useRef(null);
@@ -54,6 +86,7 @@ export default function MeetingChat({ onClose, onCopy, onSaved, meetingId = null
   const pollAbortRef = useRef(null);
   const finalizedFileRef = useRef(null); // kept so a failed upload can be retried without re-recording
   const closedRef = useRef(false);
+  const chatIdRef = useRef(chatId); // the id to attach the NEXT recording to - starts at the prop, updated once a brand-new chat is created
 
   const stopTimer = () => { if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; } };
   const startTimer = () => { stopTimer(); timerRef.current = setInterval(() => setElapsedSeconds((s) => s + 1), 1000); };
@@ -69,8 +102,9 @@ export default function MeetingChat({ onClose, onCopy, onSaved, meetingId = null
     pollAbortRef.current = null;
   };
 
-  // Stop the mic and any in-flight polling if Meeting Chat is closed (or App.jsx unmounts it, e.g. by
-  // navigating to a different chat) mid-meeting - a recording must never keep running invisibly in the background.
+  // Stop the mic and any in-flight polling if this unmounts mid-meeting (App.jsx keys MeetingChat by chatId, so
+  // switching to a different Meeting Chat - or leaving Meeting Chat mode entirely - unmounts this first) - a
+  // recording must never keep running invisibly in the background.
   useEffect(() => {
     closedRef.current = false;
     return () => {
@@ -83,25 +117,26 @@ export default function MeetingChat({ onClose, onCopy, onSaved, meetingId = null
     };
   }, []);
 
-  // Saved-meeting mode: fetch the already-stored result once, instead of recording. No ElevenLabs/Gemini call
-  // happens here - this is a plain read of what the background job already saved to Supabase.
+  // Existing Meeting Chat: load every previously saved result once, oldest first, so it reads like a
+  // conversation. A brand-new chat (chatId null) has nothing to fetch - it starts empty.
   useEffect(() => {
-    if (!meetingId) return;
+    if (!chatId) { setResults([]); setResultsLoading(false); return undefined; }
     let cancelled = false;
+    setResultsLoading(true); setResultsError('');
     (async () => {
       try {
-        const meeting = await getMeeting(meetingId);
+        const rows = await listMeetingChatResults(chatId);
         if (cancelled) return;
-        setResult({ translation: meeting.translation || '', summary: meeting.summary || '' });
-        setPhase('completed');
+        setResults(rows.map((row) => ({ id: row.id, translation: row.translation || '', summary: row.summary || '' })));
       } catch (fetchError) {
         if (cancelled) return;
-        setError(describeError(fetchError, "Couldn't load that meeting. Please try again."));
-        setPhase('error');
+        setResultsError(describeError(fetchError, "Couldn't load this meeting chat. Please try again."));
+      } finally {
+        if (!cancelled) setResultsLoading(false);
       }
     })();
     return () => { cancelled = true; };
-  }, [meetingId]);
+  }, [chatId, reloadTick]);
 
   const startRecording = async () => {
     setError('');
@@ -177,9 +212,9 @@ export default function MeetingChat({ onClose, onCopy, onSaved, meetingId = null
   const uploadAndProcess = async (file) => {
     setPhase('uploading'); setError('');
     try {
-      const { id } = await startMeeting(file, elapsedSeconds);
+      const { id, meeting_chat_id: savedChatId } = await startMeeting(file, elapsedSeconds, chatIdRef.current);
       if (closedRef.current) return;
-      pollStatus(id);
+      pollStatus(id, savedChatId);
     } catch (uploadError) {
       if (closedRef.current) return;
       setError(describeError(uploadError, 'Upload failed. Please try again.'));
@@ -187,9 +222,8 @@ export default function MeetingChat({ onClose, onCopy, onSaved, meetingId = null
     }
   };
 
-  // Named jobId (not meetingId) to avoid shadowing the meetingId PROP used by saved-view mode above - this is
-  // always the id of a job just created by uploadAndProcess, never a previously-saved meeting being reopened.
-  const pollStatus = (jobId) => {
+  // Named jobId (not chatId) - this is always the id of a job just created by uploadAndProcess.
+  const pollStatus = (jobId, savedChatId) => {
     const poll = async () => {
       if (closedRef.current) return;
       const controller = new AbortController();
@@ -199,9 +233,29 @@ export default function MeetingChat({ onClose, onCopy, onSaved, meetingId = null
         if (closedRef.current) return;
         if (status.status === 'completed') {
           // No transcript field is ever returned by the backend (see MeetingStatusResponse) - stored, never sent.
-          setResult({ translation: status.translation || '', summary: status.summary || '' });
-          setPhase('completed');
-          onSaved?.();
+          const translation = status.translation || '';
+          const summary = status.summary || '';
+          // results here is the list as it stood when this recording started (a stable closure, not the latest
+          // state) - exactly "did this chat have zero completed results before this one", which is what decides
+          // whether to name it, whether the chat was brand-new or an existing one that had never completed one.
+          const wasFirstResult = results.length === 0;
+          setResults((current) => [...current, { id: jobId, translation, summary }]);
+          setPhase('idle');
+          setElapsedSeconds(0);
+          finalizedFileRef.current = null;
+
+          if (!chatIdRef.current) {
+            // This was the very first recording of a brand-new Meeting Chat - the backend just created it.
+            chatIdRef.current = savedChatId;
+            onChatCreated?.(savedChatId);
+          }
+          if (wasFirstResult) {
+            // Name the chat from its first result - reuses the exact same Gemini title service as normal chats;
+            // is_untitled on the backend makes this a safe no-op if it somehow ran twice.
+            generateMeetingChatTitle(savedChatId, summary)
+              .catch((titleError) => console.warn('Meeting title generation skipped:', titleError.message));
+          }
+          onResultSaved?.(savedChatId);
           return;
         }
         if (status.status === 'failed') {
@@ -225,39 +279,37 @@ export default function MeetingChat({ onClose, onCopy, onSaved, meetingId = null
     else { setError(''); setPhase('idle'); }
   };
 
-  const startOver = () => {
-    finalizedFileRef.current = null;
-    setResult(null);
-    setError('');
-    setElapsedSeconds(0);
-    setPhase('idle');
-  };
-
-  const copyAll = () => {
-    if (!result) return;
-    onCopy(buildEmailBody(result.translation, result.summary), 'Meeting result copied');
-  };
-  const emailAll = () => {
-    if (!result) return;
-    openGmailCompose('TranslyAI Meeting', buildEmailBody(result.translation, result.summary));
-  };
-
   const isRecordingPhase = phase === 'recording' || phase === 'paused';
   const isProcessingPhase = phase === 'uploading' || Boolean(STAGE_LABEL[phase]);
-  // Can't be dismissed mid-recording or mid-processing - only "Stop Meeting" ends a recording, so the close
-  // button can't silently orphan or discard one (App.jsx also never unmounts this on its own during these phases).
-  const canCloseFreely = !isRecordingPhase && !isProcessingPhase;
+  const hasResults = results.length > 0;
 
   return (
     <section className="conversation meeting-chat" aria-live="polite">
       <div className="meeting-head">
-        <h2><Users size={18} /> {meetingId ? 'Saved meeting' : 'Meeting'}</h2>
-        {canCloseFreely && <button type="button" className="share-close" onClick={onClose} aria-label="Close meeting chat" title="Close"><X size={18} /></button>}
+        <h2><Users size={18} /> Meeting</h2>
       </div>
 
-      {phase === 'idle' && (
+      {resultsLoading && (
+        <div className="conversation-status"><LoaderCircle size={18} className="spin" />Loading meeting chat...</div>
+      )}
+      {resultsError && (
+        <div className="conversation-status conversation-error">
+          {resultsError}
+          <button type="button" onClick={() => setReloadTick((tick) => tick + 1)}>Try again</button>
+        </div>
+      )}
+
+      {!resultsLoading && hasResults && (
+        <div className="meeting-results-list">
+          {results.map((result) => <MeetingResultCard key={result.id} result={result} onCopy={onCopy} />)}
+        </div>
+      )}
+
+      {!resultsLoading && !resultsError && phase === 'idle' && (
         <div className="meeting-idle">
-          <p>Record a meeting (roughly 30-100 minutes) and TranslyAI will transcribe, translate, and summarize it once you stop. Typing is turned off while a meeting is open - use Stop Meeting or Close to type again.</p>
+          <p>{hasResults
+            ? 'Record another part of this meeting - TranslyAI will transcribe, translate, and summarize it and add it to this conversation.'
+            : 'Record a meeting (roughly 30-100 minutes) and TranslyAI will transcribe, translate, and summarize it once you stop. Typing is turned off while a meeting is open.'}</p>
           {error && <p className="meeting-error-line"><CircleAlert size={14} />{error}</p>}
           <button type="button" className="meeting-start-button" onClick={startRecording}><Mic size={16} />Start Meeting</button>
         </div>
@@ -292,33 +344,10 @@ export default function MeetingChat({ onClose, onCopy, onSaved, meetingId = null
           <p>{error || 'Something went wrong.'}</p>
           <div className="meeting-controls">
             {finalizedFileRef.current && <button type="button" className="meeting-secondary" onClick={retryUpload}>Retry upload</button>}
-            {meetingId
-              ? <button type="button" className="meeting-secondary" onClick={onClose}>Close</button>
-              : <button type="button" className="meeting-start-button" onClick={startOver}>Start a new meeting</button>}
+            <button type="button" className="meeting-start-button" onClick={() => { setError(''); setPhase('idle'); }}>
+              {finalizedFileRef.current ? 'Start a new meeting instead' : 'Try again'}
+            </button>
           </div>
-        </div>
-      )}
-
-      {/* Deliberately no transcript here at all, saved-meeting view or freshly completed - only translation and
-          summary are ever shown; the transcript stays a backend/database-only record (see lib/meetingApi.js /
-          MeetingStatusResponse and MeetingDetail on the backend, neither of which even returns it). */}
-      {phase === 'completed' && result && (
-        <div className="meeting-result">
-          <div className="meeting-result-actions">
-            <button type="button" className="mini-action" aria-label="Copy meeting result" title="Copy" onClick={copyAll}><Copy size={14} /></button>
-            <button type="button" className="mini-action" aria-label="Email meeting result" title="Email" onClick={emailAll}><Mail size={14} /></button>
-          </div>
-          <div className="translation-card">
-            <div className="result-heading"><span>English translation</span></div>
-            {result.translation.split(/\n{2,}/).filter(Boolean).map((paragraph, index) => <p key={index}>{paragraph}</p>)}
-          </div>
-          <div className="summary-card">
-            <div className="summary-heading"><Users size={14} />Meeting summary</div>
-            <p>{result.summary}</p>
-          </div>
-          {meetingId
-            ? <button type="button" className="meeting-secondary" onClick={onClose}>Close</button>
-            : <button type="button" className="meeting-secondary" onClick={startOver}>Start another meeting</button>}
         </div>
       )}
     </section>

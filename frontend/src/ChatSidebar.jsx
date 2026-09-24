@@ -7,10 +7,11 @@ import {
 import AccountMenu from './AccountMenu';
 import BrandMark from './BrandMark';
 import { CTA_LOGIN, CTA_SIGNUP } from './lib/authCta';
-import { formatDurationShort } from './lib/duration';
 
 const MENU_WIDTH = 190;
 
+// Generic pin/archive/delete menu - used for both a Translation chat and a Meeting Chat (they only differ in
+// which onTogglePin/onToggleArchive/onDelete callbacks the caller passes in).
 function ChatMenu({ chat, anchor, onClose, onTogglePin, onToggleArchive, onDelete }) {
   const menuRef = useRef(null);
 
@@ -62,14 +63,14 @@ function ChatMenu({ chat, anchor, onClose, onTogglePin, onToggleArchive, onDelet
   );
 }
 
-function ChatItem({ chat, active, withIcon, menuOpen, onSelect, onOpenMenu }) {
+function ChatItem({ chat, active, withIcon, icon: Icon = MessageCircle, menuOpen, onSelect, onOpenMenu }) {
   return (
     <div
       className={`session-item ${active ? 'active' : ''} ${menuOpen ? 'menu-open' : ''}`}
       onContextMenu={(event) => { event.preventDefault(); onOpenMenu(chat, event.currentTarget.querySelector('.chat-more')); }}
     >
       <button type="button" className="session-select" onClick={() => onSelect(chat.id)} title={chat.title}>
-        {withIcon && <span className="session-icon"><MessageCircle size={16} /></span>}<span>{chat.title}</span>
+        {withIcon && <span className="session-icon"><Icon size={16} /></span>}<span>{chat.title}</span>
       </button>
       <button
         type="button"
@@ -85,60 +86,59 @@ function ChatItem({ chat, active, withIcon, menuOpen, onSelect, onOpenMenu }) {
   );
 }
 
-// One saved meeting: date, duration, and a plain-text preview of its summary (bullets/markdown stripped) -
-// visually distinct from ChatItem (a mic icon instead of the chat bubble icon, no pin/archive/delete menu) so it
-// clearly reads as a meeting, not a translation chat.
-function MeetingItem({ meeting, onSelect }) {
-  const date = new Date(meeting.created_at);
-  const dateLabel = Number.isNaN(date.getTime())
-    ? ''
-    : date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
-  const preview = (meeting.summary || '').replace(/[•*]/g, '').replace(/\s+/g, ' ').trim();
-  return (
-    <button type="button" className="session-item meeting-item" onClick={() => onSelect(meeting.id)}>
-      <span className="session-icon"><Users size={16} /></span>
-      <span className="meeting-item-body">
-        <span className="meeting-item-meta">
-          {dateLabel}{meeting.duration_seconds != null && ` · ${formatDurationShort(meeting.duration_seconds)}`}
-        </span>
-        {preview && <span className="meeting-item-preview">"{preview.length > 90 ? `${preview.slice(0, 90).trimEnd()}...` : preview}"</span>}
-      </span>
-    </button>
-  );
+function groupByState(list, term) {
+  const matches = term ? list.filter((item) => item.title.toLowerCase().includes(term)) : list;
+  return {
+    pinned: matches.filter((item) => item.is_pinned && !item.is_archived),
+    recent: matches.filter((item) => !item.is_pinned && !item.is_archived),
+    archived: matches.filter((item) => item.is_archived),
+  };
 }
 
 export default function ChatSidebar({
   chats, loading, error, onRetry, activeId, isOpen, user, guest = false, onRequestAuth = () => {},
   onSignOut, onProfileChange, onNew, onSelect, onClose, onTogglePin, onToggleArchive, onDelete,
-  historyTab = 'translations', onHistoryTabChange = () => {}, meetings = [], meetingsLoading = false,
-  meetingsError = '', onRetryMeetings, onSelectMeeting = () => {},
+  historyTab = 'translations', onHistoryTabChange = () => {},
+  // Meeting Chats: same shape/behavior as chats (id/title/is_pinned/is_archived), just a separate list and a
+  // separate set of callbacks - see App.jsx's meetingChats state and toggleMeetingChatPin/etc handlers.
+  meetings = [], meetingsLoading = false, meetingsError = '', onRetryMeetings,
+  activeMeetingChatId = null, onNewMeeting = () => {}, onSelectMeeting = () => {},
+  onToggleMeetingPin = () => {}, onToggleMeetingArchive = () => {}, onDeleteMeeting = () => {},
 }) {
   const [query, setQuery] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
   const [archivedOpen, setArchivedOpen] = useState(false);
-  const [menu, setMenu] = useState(null);
+  const [meetingsArchivedOpen, setMeetingsArchivedOpen] = useState(false);
+  const [menu, setMenu] = useState(null); // { kind: 'chat' | 'meeting', chatId, anchor }
   const searchInputRef = useRef(null);
 
   const term = query.trim().toLowerCase();
-  const { pinned, recent, archived } = useMemo(() => {
-    const matches = term ? chats.filter((chat) => chat.title.toLowerCase().includes(term)) : chats;
-    return {
-      pinned: matches.filter((chat) => chat.is_pinned && !chat.is_archived),
-      recent: matches.filter((chat) => !chat.is_pinned && !chat.is_archived),
-      archived: matches.filter((chat) => chat.is_archived),
-    };
-  }, [chats, term]);
+  const { pinned, recent, archived } = useMemo(() => groupByState(chats, term), [chats, term]);
+  const { pinned: meetingsPinned, recent: meetingsRecent, archived: meetingsArchived } = useMemo(() => groupByState(meetings, ''), [meetings]);
 
   const showArchived = archivedOpen || (term && archived.length > 0);
   const nothingMatches = !pinned.length && !recent.length && !archived.length;
-  const menuChat = menu ? chats.find((chat) => chat.id === menu.chatId) : null;
+  const menuChat = menu?.kind === 'chat' ? chats.find((chat) => chat.id === menu.chatId) : null;
+  const menuMeeting = menu?.kind === 'meeting' ? meetings.find((chat) => chat.id === menu.chatId) : null;
   const closeMenu = useRef(() => setMenu(null)).current;
-  const openMenu = (chat, anchor) => setMenu(menu?.chatId === chat.id ? null : { chatId: chat.id, anchor });
+  const openMenu = (chat, anchor) => setMenu(menu?.kind === 'chat' && menu.chatId === chat.id ? null : { kind: 'chat', chatId: chat.id, anchor });
+  const openMeetingMenu = (chat, anchor) => setMenu(menu?.kind === 'meeting' && menu.chatId === chat.id ? null : { kind: 'meeting', chatId: chat.id, anchor });
 
   const toggleSearch = () => { if (searchOpen) setQuery(''); setSearchOpen((open) => !open); };
   const renderItem = (chat, withIcon = false) => (
-    <ChatItem key={chat.id} chat={chat} active={chat.id === activeId} withIcon={withIcon} menuOpen={menu?.chatId === chat.id} onSelect={onSelect} onOpenMenu={openMenu} />
+    <ChatItem key={chat.id} chat={chat} active={chat.id === activeId} withIcon={withIcon} menuOpen={menu?.kind === 'chat' && menu.chatId === chat.id} onSelect={onSelect} onOpenMenu={openMenu} />
   );
+  const renderMeetingItem = (chat) => (
+    <ChatItem key={chat.id} chat={chat} active={chat.id === activeMeetingChatId} withIcon icon={Users} menuOpen={menu?.kind === 'meeting' && menu.chatId === chat.id} onSelect={onSelectMeeting} onOpenMenu={openMeetingMenu} />
+  );
+
+  // "New chat" is context-aware: on the Meetings tab it opens a brand-new Meeting Chat instead of forcing the
+  // Translations tab and starting a translation chat.
+  const handleNewChat = () => {
+    if (historyTab === 'meetings') { onNewMeeting(); return; }
+    onHistoryTabChange('translations');
+    onNew();
+  };
 
   return (
     <aside className={`sidebar ${isOpen ? 'sidebar-open' : ''}`}>
@@ -152,7 +152,7 @@ export default function ChatSidebar({
         </div>
       </div>
 
-      <button type="button" className="new-chat-button" onClick={() => { onHistoryTabChange('translations'); onNew(); }}><SquarePen size={17} />New chat</button>
+      <button type="button" className="new-chat-button" onClick={handleNewChat}><SquarePen size={17} />New chat</button>
 
       <div className="history-tabs" role="tablist" aria-label="History type">
         <button type="button" role="tab" aria-selected={historyTab === 'translations'} className={`history-tab ${historyTab === 'translations' ? 'active' : ''}`} onClick={() => onHistoryTabChange('translations')}>Translations</button>
@@ -198,15 +198,33 @@ export default function ChatSidebar({
         <nav className="session-list" aria-label="Meetings">
           {meetingsError && <div className="sidebar-error" role="alert">{meetingsError}{onRetryMeetings && <button type="button" onClick={onRetryMeetings}>Retry</button>}</div>}
           {meetingsLoading && !meetings.length && <p className="empty-history sidebar-loading"><LoaderCircle size={14} className="spin" />Loading meetings...</p>}
-          {meetings.map((meeting) => <MeetingItem key={meeting.id} meeting={meeting} onSelect={onSelectMeeting} />)}
+
+          {meetingsPinned.length > 0 && <div className="history-label">Pinned</div>}
+          {meetingsPinned.map(renderMeetingItem)}
+
+          {meetingsRecent.length > 0 && <div className="history-label">Recents</div>}
+          {meetingsRecent.map(renderMeetingItem)}
+
           {!meetingsLoading && !meetingsError && !meetings.length && (
-            <p className="empty-history">{guest ? 'Meetings are saved when you sign up.' : 'Meetings you record will appear here once processed.'}</p>
+            <p className="empty-history">{guest ? 'Meetings are saved when you sign up.' : 'Your meeting chats will appear here.'}</p>
+          )}
+
+          {meetingsArchived.length > 0 && (
+            <>
+              <button type="button" className="history-label archived-toggle" onClick={() => setMeetingsArchivedOpen((open) => !open)} aria-expanded={meetingsArchivedOpen}>
+                {meetingsArchivedOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}Archived ({meetingsArchived.length})
+              </button>
+              {meetingsArchivedOpen && meetingsArchived.map(renderMeetingItem)}
+            </>
           )}
         </nav>
       )}
 
       {menu && menuChat && (
         <ChatMenu chat={menuChat} anchor={menu.anchor} onClose={closeMenu} onTogglePin={onTogglePin} onToggleArchive={onToggleArchive} onDelete={onDelete} />
+      )}
+      {menu && menuMeeting && (
+        <ChatMenu chat={menuMeeting} anchor={menu.anchor} onClose={closeMenu} onTogglePin={onToggleMeetingPin} onToggleArchive={onToggleMeetingArchive} onDelete={onDeleteMeeting} />
       )}
 
       {guest ? (

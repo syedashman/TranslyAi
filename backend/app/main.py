@@ -6,7 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.meeting_routes import router as meeting_router
+from app.meeting_routes import chats_router as meeting_chats_router, router as meeting_router
 from app.routes import router
 from app.services.chat_store import ChatStore
 from app.services.meeting_store import MeetingStore
@@ -57,6 +57,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 app.include_router(router)
 app.include_router(meeting_router)
+app.include_router(meeting_chats_router)
 
 
 @app.get("/health")

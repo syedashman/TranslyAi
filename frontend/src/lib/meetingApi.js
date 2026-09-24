@@ -19,13 +19,17 @@ function wrapError(error) {
   return wrapped;
 }
 
-// Uploads the finalized recording and returns { id, status } immediately - the backend processes it as a
-// background task, so this call itself only has to wait for the upload, not the full transcription/translation.
-export async function startMeeting(file, durationSeconds, { signal } = {}) {
+// Uploads the finalized recording and returns { id, status, meeting_chat_id } immediately - the backend processes
+// it as a background task, so this call itself only has to wait for the upload, not the full transcription/
+// translation. Pass an existing Meeting Chat's id to add another result to it; omit it (null/undefined) to have
+// the backend create a brand-new Meeting Chat on the fly for this recording - either way the response says which
+// chat the result landed in.
+export async function startMeeting(file, durationSeconds, meetingChatId, { signal } = {}) {
   const headers = await authHeader();
   const formData = new FormData();
   formData.append('file', file);
   if (durationSeconds != null) formData.append('duration_seconds', String(Math.round(durationSeconds)));
+  if (meetingChatId) formData.append('meeting_chat_id', meetingChatId);
   try {
     const response = await axios.post(`${API_BASE_URL}/api/meetings`, formData, {
       headers: { ...headers, 'Content-Type': 'multipart/form-data' },
@@ -51,24 +55,80 @@ export async function getMeetingStatus(meetingId, { signal } = {}) {
   }
 }
 
-// This user's saved (completed-only) meetings, newest first, for the Meetings history tab. Lightweight rows -
-// no translation/transcript - just enough for a list preview (id, status, duration, summary, timestamps).
-export async function listMeetings({ signal } = {}) {
+// ---------- Meeting Chats: the persistent container a recording is saved into (Meetings sidebar tab) ----------
+// Mirrors chatApi.js's /chats functions - same shapes (id/title/is_pinned/is_archived/created_at/updated_at),
+// same pin/archive/delete/title behavior, just talking to /api/meeting-chats instead of /api/chats.
+
+export async function listMeetingChats({ signal } = {}) {
   const headers = await authHeader();
   try {
-    const response = await axios.get(`${API_BASE_URL}/api/meetings`, { headers, timeout: 30000, signal });
+    const response = await axios.get(`${API_BASE_URL}/api/meeting-chats`, { headers, params: { archived: 'all' }, timeout: 60000, signal });
     return response.data;
   } catch (error) {
     throw wrapError(error);
   }
 }
 
-// One saved meeting's full stored translation + summary (never the transcript - see getMeetingStatus above).
-// A plain read of what the background job already saved; never re-transcribes or re-translates anything.
-export async function getMeeting(meetingId, { signal } = {}) {
+// "New chat" while the Meetings tab is selected - an empty conversation, shown immediately in the sidebar even
+// before anything has been recorded into it.
+export async function createMeetingChat() {
   const headers = await authHeader();
   try {
-    const response = await axios.get(`${API_BASE_URL}/api/meetings/${meetingId}`, { headers, timeout: 30000, signal });
+    const response = await axios.post(`${API_BASE_URL}/api/meeting-chats`, {}, { headers, timeout: 30000 });
+    return response.data;
+  } catch (error) {
+    throw wrapError(error);
+  }
+}
+
+export async function setMeetingChatPinned(chatId, value) {
+  const headers = await authHeader();
+  try {
+    const response = await axios.patch(`${API_BASE_URL}/api/meeting-chats/${chatId}/pin`, { value }, { headers, timeout: 30000 });
+    return response.data;
+  } catch (error) {
+    throw wrapError(error);
+  }
+}
+
+export async function setMeetingChatArchived(chatId, value) {
+  const headers = await authHeader();
+  try {
+    const response = await axios.patch(`${API_BASE_URL}/api/meeting-chats/${chatId}/archive`, { value }, { headers, timeout: 30000 });
+    return response.data;
+  } catch (error) {
+    throw wrapError(error);
+  }
+}
+
+export async function deleteMeetingChat(chatId) {
+  const headers = await authHeader();
+  try {
+    await axios.delete(`${API_BASE_URL}/api/meeting-chats/${chatId}`, { headers, timeout: 30000 });
+  } catch (error) {
+    throw wrapError(error);
+  }
+}
+
+// Asks the backend for a short AI title, generated from the Meeting Chat's first result's summary. A chat that
+// already has a title is returned unchanged (see TitleService.is_untitled on the backend), so this is safe to
+// call after every completed recording without ever renaming a chat twice.
+export async function generateMeetingChatTitle(chatId, text) {
+  const headers = await authHeader();
+  try {
+    const response = await axios.post(`${API_BASE_URL}/api/meeting-chats/${chatId}/title`, { text: text.slice(0, 2000) }, { headers, timeout: 60000 });
+    return response.data;
+  } catch (error) {
+    throw wrapError(error);
+  }
+}
+
+// Every completed result inside one Meeting Chat, oldest first - the conversation-like timeline MeetingChat.jsx
+// renders (translation + summary per result; never a transcript).
+export async function listMeetingChatResults(chatId, { signal } = {}) {
+  const headers = await authHeader();
+  try {
+    const response = await axios.get(`${API_BASE_URL}/api/meeting-chats/${chatId}/meetings`, { headers, timeout: 30000, signal });
     return response.data;
   } catch (error) {
     throw wrapError(error);
