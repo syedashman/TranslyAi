@@ -64,6 +64,18 @@ export async function uploadMeetingRecording(file, meetingChatId, { signal } = {
   }
 }
 
+// Cancel = DISCARD a Record/Upload job that has not finished: it is stopped and nothing is translated, summarized or
+// saved from it. Rejects (status 409) if the result was already written.
+export async function cancelMeetingJob(meetingId) {
+  const headers = await authHeader();
+  try {
+    const response = await axios.post(`${API_BASE_URL}/api/meetings/${meetingId}/cancel`, {}, { headers, timeout: 30000 });
+    return response.data;
+  } catch (error) {
+    throw wrapError(error);
+  }
+}
+
 // Current stage while processing (queued/transcribing/translating/summarizing), or the finished
 // translation/summary once status is "completed", or error_message if "failed". Never includes the transcript -
 // the backend's response model deliberately excludes it (stored, never sent to the frontend).

@@ -13,7 +13,7 @@ here by calling the *same* existing translate/summarize functions again, rather 
 import asyncio
 import logging
 
-from app.services.meeting_jobs import get_job, update_job
+from app.services.meeting_jobs import get_job, is_cancelled, mark_committing, update_job
 from app.services.meeting_store import MeetingStore
 from app.services.speech import SpeechService
 from app.services.summarizer import SummarizerService
@@ -112,10 +112,14 @@ async def process_meeting(job_id: str, audio_path: str) -> None:
     """Runs as a FastAPI BackgroundTask, after the POST /api/meetings response has already been sent - nothing
     here keeps an HTTP request open, however long it takes."""
     try:
+        if is_cancelled(job_id):
+            return  # cancelled before processing even started (the finally below still deletes the audio file)
         update_job(job_id, status="transcribing")
         transcript = await SpeechService.transcribe_file(
             audio_path, auto_detect=True, timeout=MEETING_STT_TIMEOUT_SECONDS,
         )
+        if is_cancelled(job_id):
+            return  # the user cancelled: nothing is translated, summarized or saved
         transcript = (transcript or "").strip()
         if not transcript:
             raise RuntimeError("No speech was detected in the recording.")
@@ -123,10 +127,14 @@ async def process_meeting(job_id: str, audio_path: str) -> None:
 
         update_job(job_id, status="translating")
         translation = await _translate_transcript(transcript)
+        if is_cancelled(job_id):
+            return
         update_job(job_id, translation=translation)
 
         update_job(job_id, status="summarizing")
         summary = await _summarize(translation)
+        if is_cancelled(job_id):
+            return
         update_job(job_id, summary=summary)
 
         # Persist to Supabase BEFORE flipping the LIVE in-memory status to "completed": the frontend polls that
@@ -139,10 +147,13 @@ async def process_meeting(job_id: str, audio_path: str) -> None:
         if final_job is None:
             return  # job was evicted (see meeting_jobs._MAX_JOBS) - nothing left to persist or mark completed
         final_job["status"] = "completed"
+        mark_committing(job_id)  # from here on a cancel is too late: it would race the save
         await _persist(final_job)
 
         update_job(job_id, status="completed")
     except Exception as error:
+        if is_cancelled(job_id):
+            return  # a discarded meeting is not reported or persisted as a failure either
         logger.error("MEETING PROCESSING FAILED (job %s): %r", job_id, error)
         job = update_job(job_id, status="failed", error_message=str(error))
         if job:

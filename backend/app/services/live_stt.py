@@ -83,6 +83,7 @@ class LiveSTT:
         self._closing = False
         self._commit_requested = False  # finish() asked for a final commit; the sender clears it once sent
         self._commit_sent = False  # the final commit is on the wire: the next committed_transcript answers it
+        self._ack_wanted = False  # only finish()'s commit is waited for; a pause's commit is fire-and-forget
         self._commit_acked = asyncio.Event()
         self._ws = None
 
@@ -99,12 +100,21 @@ class LiveSTT:
             self._buffer.popleft()
         self._wake.set()
 
+    def commit(self) -> None:
+        """Asks the provider to finalize the sentence it is holding (used when the host pauses) without waiting for an
+        answer: the resulting committed_transcript arrives through on_final like any other."""
+        if self._closing:
+            return
+        self._commit_requested = True
+        self._wake.set()
+
     async def finish(self, timeout: float = 8.0) -> None:
         """Flush what is still buffered, force the provider to commit any half-finished sentence, wait (bounded)
         for that last committed transcript, then close. Everything final arrives through on_final as usual."""
         if self._task is None or self._task.done():
             return
         self._commit_acked.clear()
+        self._ack_wanted = True
         self._commit_requested = True
         self._wake.set()
         try:
@@ -216,7 +226,7 @@ class LiveSTT:
                     "sample_rate": SAMPLE_RATE,
                     "commit": True,
                 }))
-                self._commit_sent = True
+                self._commit_sent = self._ack_wanted
             self._wake.clear()
             if self._buffer or self._commit_requested:
                 continue

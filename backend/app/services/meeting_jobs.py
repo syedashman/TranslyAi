@@ -56,6 +56,34 @@ def update_job(job_id: str, **fields) -> Optional[dict]:
     job = _JOBS.get(job_id)
     if job is None:
         return None
+    if job.get("cancelled"):
+        return dict(job)  # the user discarded this meeting: a late pipeline stage must not revive or overwrite it
     job.update(fields)
     job["updated_at"] = time.time()
     return dict(job)
+
+
+def is_cancelled(job_id: str) -> bool:
+    job = _JOBS.get(job_id)
+    return bool(job and job.get("cancelled"))
+
+
+def mark_committing(job_id: str) -> None:
+    """The pipeline is about to write the finished result: from here on a cancel is too late (it would race the save)."""
+    job = _JOBS.get(job_id)
+    if job is not None:
+        job["committing"] = True
+
+
+def cancel_job(job_id: str) -> str:
+    """Discards a not-yet-finished job. Returns "cancelled" (or "already_cancelled"), or "too_late" if it already
+    finished, failed or is being saved. Synchronous on purpose: check-and-set can't interleave with the pipeline."""
+    job = _JOBS.get(job_id)
+    if job is None:
+        return "unknown"
+    if job.get("cancelled"):
+        return "already_cancelled"
+    if job.get("committing") or job.get("status") in ("completed", "failed"):
+        return "too_late"
+    job.update(cancelled=True, status="cancelled", translation=None, summary=None, transcript=None, updated_at=time.time())
+    return "cancelled"

@@ -30,6 +30,31 @@ export async function createLiveMeeting(meetingChatId) {
   }
 }
 
+// Cancel = DISCARD (nothing is saved). Retried a couple of times over REST because a cancel that never arrives would
+// let the server finalize and SAVE the meeting once its reconnect grace runs out. Resolves true when the server
+// confirms; rejects with a user-facing message if it could not be confirmed or the meeting was already saved.
+export async function cancelLiveMeeting(meetingId) {
+  let lastError;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const token = await accessToken();
+      await axios.post(`${API_BASE_URL}/api/live-meetings/${meetingId}/cancel`, {}, { headers: { Authorization: `Bearer ${token}` }, timeout: 15000 });
+      return true;
+    } catch (error) {
+      const status = error?.response?.status;
+      if (status === 409) {
+        const saved = new Error('This meeting was already saved, so it could not be cancelled. You can find it in your Meeting Chat.');
+        saved.code = 'already_saved';
+        throw saved;
+      }
+      if (status === 404) return true; // already gone on the server (finished/cancelled/expired): nothing left to discard
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 600 * (attempt + 1)));
+    }
+  }
+  throw new Error(describeError(lastError, "Couldn't confirm the cancellation. Check your connection - the meeting may still be saved if it isn't cancelled."));
+}
+
 const wsUrl = (meetingId) => `${API_BASE_URL.replace(/^http/i, 'ws')}/ws/live-meeting/${meetingId}`;
 
 const MAX_RECONNECTS = 5;
@@ -37,7 +62,7 @@ const HEARTBEAT_MS = 15000;
 const READY_TIMEOUT_MS = 15000;
 const MAX_BUFFERED_BYTES = 1024 * 1024; // never queue more than ~1 MB of audio in the socket - drop instead
 const CLOSE_UNAUTHORIZED = 4401;
-const TERMINAL_EVENTS = new Set(['completed', 'failed']);
+const TERMINAL_EVENTS = new Set(['completed', 'failed', 'cancelled']);
 
 // handlers: onEvent(event), onStatus('connecting' | 'live' | 'reconnecting'), onGiveUp(message).
 // The socket never re-creates the meeting: a reconnect re-attaches to the same server-side session by id, and the
@@ -129,6 +154,24 @@ export class LiveMeetingSocket {
     if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ type: 'stop' }));
   }
 
+  // Pause / resume travel over the host's socket only. They resolve false when the message could not be sent (the socket is
+  // down), so the UI never claims a state the server did not receive.
+  sendPause() {
+    if (this.ws?.readyState !== WebSocket.OPEN || !this.ready) return false;
+    this.ws.send(JSON.stringify({ type: 'pause' }));
+    return true;
+  }
+
+  sendResume() {
+    if (this.ws?.readyState !== WebSocket.OPEN || !this.ready) return false;
+    this.ws.send(JSON.stringify({ type: 'resume' }));
+    return true;
+  }
+
+  sendCancel() {
+    if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ type: 'cancel' }));
+  }
+
   startHeartbeat() {
     this.stopHeartbeat();
     this.heartbeat = setInterval(() => {
@@ -186,7 +229,7 @@ export class LiveViewerSocket {
       let event;
       try { event = JSON.parse(message.data); } catch { return; }
       if (event.type === 'ready') { this.attempts = 0; this.handlers.onStatus?.('live'); this.startHeartbeat(); }
-      if (event.type === 'completed' || event.type === 'failed') this.finished = true;
+      if (event.type === 'completed' || event.type === 'failed' || event.type === 'cancelled') this.finished = true;
       this.handlers.onEvent?.(event);
     };
     ws.onclose = (event) => {

@@ -606,3 +606,15 @@ button, textarea, select { font: inherit; } button { cursor: pointer; }
 .live-save-title { display: inline-flex; align-items: center; gap: 6px; margin: 0; font-size: 15px; font-weight: 700; }
 .live-save-text { margin: 0 0 6px; color: var(--muted); font-size: 13px; line-height: 1.5; max-width: 420px; }
 @media (max-width: 480px) { .live-share-row { flex-direction: column; } .live-share-panel .live-copy-button { width: 100%; justify-content: center; } }
+
+/* Live Meeting: status, sources, setup steps, cancel */
+.live-status { margin: 0; color: var(--text); font-size: 13.5px; }
+.live-status span { color: var(--muted); }
+.live-source { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--muted); font-size: 12.5px; }
+.live-source.is-warn, .live-notice.is-warn { color: #f59e0b; }
+.live-steps { margin: 4px 0 8px; padding-left: 20px; color: var(--muted); font-size: 13.5px; line-height: 1.6; text-align: left; }
+.live-steps strong { color: var(--text); font-weight: 600; }
+.live-footer-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: center; }
+.live-stopping { flex-wrap: wrap; justify-content: center; }
+.live-cancel-button { padding: 9px 16px; font-size: 13.5px; }
+.meeting-info-line { margin: 0 0 10px; color: var(--muted); font-size: 13.5px; }

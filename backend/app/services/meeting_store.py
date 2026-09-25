@@ -111,6 +111,17 @@ class MeetingStore:
         return True
 
     @classmethod
+    async def discard(cls, meeting_id: str) -> None:
+        """Removes the placeholder row a discarded (cancelled) recording left behind. Only ever a row that never
+        completed; never raises."""
+        if not cls.is_configured():
+            return
+        try:
+            await cls._request("DELETE", "/meetings", params={"id": f"eq.{meeting_id}", "status": "neq.completed"})
+        except Exception as error:  # noqa: BLE001 - the row is invisible anyway (history lists completed meetings only)
+            print(f"MEETING STORE DISCARD FAILED (non-fatal): id={meeting_id} error={error!r}")
+
+    @classmethod
     async def fetch_by_id(cls, meeting_id: str) -> Optional[dict]:
         """One COMPLETED meeting row by id, read with the service-role key. Server-side only, used by the Live
         Meeting claim flow (which has already verified a signed claim token for exactly this id) - never exposed

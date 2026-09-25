@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
-import { CircleAlert, Copy, LoaderCircle, Mail, Mic, Pause, Play, Radio, Square, Upload, Users } from 'lucide-react';
+import { CircleAlert, Copy, LoaderCircle, Mail, Mic, Pause, Play, Radio, Square, Upload, Users, X } from 'lucide-react';
+import ConfirmDiscardModal from './ConfirmDiscardModal';
 import { formatDuration } from './lib/duration';
 import { buildEmailBody, openGmailCompose } from './lib/email';
 import { describeError } from './lib/errors';
 import LiveMeeting from './LiveMeeting';
+import { cancelLiveMeeting } from './lib/liveMeetingApi';
 import StructuredSummary from './StructuredSummary';
 import {
-  generateMeetingChatTitle, getMeetingStatus, listMeetingChatResults, startMeeting, uploadMeetingRecording,
+  cancelMeetingJob, generateMeetingChatTitle, getMeetingStatus, listMeetingChatResults, startMeeting, uploadMeetingRecording,
 } from './lib/meetingApi';
 
 // "Upload Recording" file picker - video is the main new feature (its audio track is extracted server-side via
@@ -84,6 +86,8 @@ export default function MeetingChat({ chatId = null, onCopy, onChatCreated, onRe
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [error, setError] = useState('');
   const [canPause, setCanPause] = useState(true);
+  const [info, setInfo] = useState(''); // a neutral one-line result of the last action (e.g. "Recording cancelled")
+  const [confirmDiscard, setConfirmDiscard] = useState(null); // null | 'recording' | 'processing'
 
   const recorderRef = useRef(null);
   const streamRef = useRef(null);
@@ -96,6 +100,8 @@ export default function MeetingChat({ chatId = null, onCopy, onChatCreated, onRe
   const pickedFileRef = useRef(null); // kept so a failed FILE upload can be retried without re-picking
   const uploadInputRef = useRef(null);
   const closedRef = useRef(false);
+  const uploadAbortRef = useRef(null); // aborts an in-flight upload when the user cancels
+  const activeJobRef = useRef(null); // { id, chatId, live } of the job being polled - what Cancel discards
   const chatIdRef = useRef(chatId); // the id to attach the NEXT recording to - starts at the prop, updated once a brand-new chat is created
 
   const stopTimer = () => { if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; } };
@@ -149,7 +155,7 @@ export default function MeetingChat({ chatId = null, onCopy, onChatCreated, onRe
   }, [chatId, reloadTick]);
 
   const startRecording = async () => {
-    setError('');
+    setError(''); setInfo('');
     if (typeof MediaRecorder === 'undefined') { setError('Recording is not supported in this browser.'); return; }
     if (!navigator.mediaDevices?.getUserMedia) { setError('Microphone recording is not supported in this browser.'); return; }
     try {
@@ -206,6 +212,61 @@ export default function MeetingChat({ chatId = null, onCopy, onChatCreated, onRe
     recorder.stop();
   };
 
+  // Cancel Recording = DISCARD: the recorder and microphone are released, the captured audio is thrown away and
+  // nothing is uploaded, processed, translated, summarized or added to the Meeting Chat.
+  const discardRecording = () => {
+    setConfirmDiscard(null);
+    stopTimer();
+    const recorder = recorderRef.current;
+    recorderRef.current = null;
+    if (recorder) {
+      recorder.ondataavailable = null;
+      recorder.onerror = null;
+      recorder.onstop = null; // never reaches handleRecordingFinished -> nothing is uploaded
+      if (recorder.state !== 'inactive') { try { recorder.stop(); } catch { /* already stopping */ } }
+    }
+    releaseStream();
+    chunksRef.current = [];
+    finalizedFileRef.current = null;
+    setElapsedSeconds(0);
+    setError('');
+    setInfo('Recording cancelled - nothing was saved.');
+    setPhase('idle');
+  };
+
+  // Cancel while a recording/file is uploading or a job is processing: an upload in flight is aborted; a job the server
+  // already accepted is discarded there (it stops at its next stage and nothing is saved). If the result was already
+  // written it is too late - the meeting is kept and its normal completion is shown instead.
+  const discardProcessing = async () => {
+    setConfirmDiscard(null);
+    if (phase === 'uploading') {
+      uploadAbortRef.current?.abort();
+      uploadAbortRef.current = null;
+      finalizedFileRef.current = null; pickedFileRef.current = null;
+      setError(''); setInfo('Upload cancelled - nothing was saved.'); setPhase('idle');
+      return;
+    }
+    const job = activeJobRef.current;
+    if (!job) return;
+    stopPolling();
+    try {
+      if (job.live) await cancelLiveMeeting(job.id);
+      else await cancelMeetingJob(job.id);
+    } catch (cancelError) {
+      if (cancelError.code === 'already_saved' || cancelError.status === 409) {
+        setInfo('This meeting had already finished, so it was kept.');
+        pollStatus(job.id, job.chatId);
+        return;
+      }
+      setError(cancelError.message || "Couldn't confirm the cancellation. Please try again.");
+      setPhase('error');
+      return;
+    }
+    activeJobRef.current = null;
+    finalizedFileRef.current = null; pickedFileRef.current = null;
+    setError(''); setInfo('Meeting cancelled - nothing was saved.'); setElapsedSeconds(0); setPhase('idle');
+  };
+
   const handleRecordingFinished = async () => {
     if (closedRef.current) return;
     const chunks = chunksRef.current;
@@ -220,13 +281,16 @@ export default function MeetingChat({ chatId = null, onCopy, onChatCreated, onRe
   };
 
   const uploadAndProcess = async (file) => {
-    setPhase('uploading'); setError('');
+    setPhase('uploading'); setError(''); setInfo('');
+    const controller = new AbortController();
+    uploadAbortRef.current = controller;
     try {
-      const { id, meeting_chat_id: savedChatId } = await startMeeting(file, elapsedSeconds, chatIdRef.current);
+      const { id, meeting_chat_id: savedChatId } = await startMeeting(file, elapsedSeconds, chatIdRef.current, { signal: controller.signal });
       if (closedRef.current) return;
+      activeJobRef.current = { id, chatId: savedChatId, live: false };
       pollStatus(id, savedChatId);
     } catch (uploadError) {
-      if (closedRef.current) return;
+      if (closedRef.current || controller.signal.aborted) return;
       setError(describeError(uploadError, 'Upload failed. Please try again.'));
       setPhase('error');
     }
@@ -238,14 +302,17 @@ export default function MeetingChat({ chatId = null, onCopy, onChatCreated, onRe
   const openUploadPicker = () => { setError(''); uploadInputRef.current?.click(); };
 
   const uploadPickedFile = async (file) => {
-    setPhase('uploading'); setError('');
+    setPhase('uploading'); setError(''); setInfo('');
     pickedFileRef.current = file;
+    const controller = new AbortController();
+    uploadAbortRef.current = controller;
     try {
-      const { id, meeting_chat_id: savedChatId } = await uploadMeetingRecording(file, chatIdRef.current);
+      const { id, meeting_chat_id: savedChatId } = await uploadMeetingRecording(file, chatIdRef.current, { signal: controller.signal });
       if (closedRef.current) return;
+      activeJobRef.current = { id, chatId: savedChatId, live: false };
       pollStatus(id, savedChatId);
     } catch (uploadError) {
-      if (closedRef.current) return;
+      if (closedRef.current || controller.signal.aborted) return;
       setError(describeError(uploadError, 'Upload failed. Please try again.'));
       setPhase('error');
     }
@@ -277,6 +344,7 @@ export default function MeetingChat({ chatId = null, onCopy, onChatCreated, onRe
           setResults((current) => [...current, { id: jobId, translation, summary }]);
           setPhase('idle');
           setElapsedSeconds(0);
+          activeJobRef.current = null;
           finalizedFileRef.current = null;
           pickedFileRef.current = null;
 
@@ -294,6 +362,7 @@ export default function MeetingChat({ chatId = null, onCopy, onChatCreated, onRe
           onResultSaved?.(savedChatId);
           return;
         }
+        if (status.status === 'cancelled') { activeJobRef.current = null; setPhase('idle'); return; }
         if (status.status === 'failed') {
           setError(status.error_message || 'Meeting processing failed. Please try again.');
           setPhase('error');
@@ -313,9 +382,17 @@ export default function MeetingChat({ chatId = null, onCopy, onChatCreated, onRe
   // Live Meeting handed a stopped session back: from here it is an ordinary meeting job (the server finishes the
   // last sentences, translates, summarizes and saves it) - the identical polling/result path a recording uses.
   const handleLiveStopped = (jobId, savedChatId) => {
-    setError('');
+    setError(''); setInfo('');
+    activeJobRef.current = { id: jobId, chatId: savedChatId, live: true };
     setPhase('queued');
     pollStatus(jobId, savedChatId);
+  };
+
+  // Live Meeting was cancelled (confirmed by the server): back to the normal Meeting Chat, nothing was saved.
+  const handleLiveDiscarded = () => {
+    activeJobRef.current = null;
+    setError(''); setInfo('Live meeting cancelled - nothing was saved.');
+    setPhase('idle');
   };
 
   const retryUpload = () => {
@@ -355,10 +432,11 @@ export default function MeetingChat({ chatId = null, onCopy, onChatCreated, onRe
           <p>{hasResults
             ? 'Record or upload another part of this meeting - TranslyAI will transcribe, translate, and summarize it and add it to this conversation.'
             : 'Record a meeting (roughly 30-100 minutes) or upload a recorded video/audio file, and TranslyAI will transcribe, translate, and summarize it. Typing is turned off while a meeting is open.'}</p>
+          {info && <p className="meeting-info-line" role="status">{info}</p>}
           {error && <p className="meeting-error-line"><CircleAlert size={14} />{error}</p>}
           <div className="meeting-controls">
             <button type="button" className="meeting-start-button" onClick={startRecording}><Mic size={16} />Record Meeting</button>
-            <button type="button" className="meeting-secondary" onClick={() => { setError(''); setPhase('live_setup'); }}><Radio size={16} />Live Meeting</button>
+            <button type="button" className="meeting-secondary" onClick={() => { setError(''); setInfo(''); setPhase('live_setup'); }}><Radio size={16} />Live Meeting</button>
             <button type="button" className="meeting-secondary" onClick={openUploadPicker}><Upload size={16} />Upload Recording</button>
           </div>
           <input
@@ -369,7 +447,7 @@ export default function MeetingChat({ chatId = null, onCopy, onChatCreated, onRe
       )}
 
       {phase === 'live_setup' && (
-        <LiveMeeting chatId={chatIdRef.current} onCancel={() => setPhase('idle')} onStopped={handleLiveStopped} />
+        <LiveMeeting chatId={chatIdRef.current} onCancel={() => setPhase('idle')} onStopped={handleLiveStopped} onDiscarded={handleLiveDiscarded} />
       )}
 
       {isRecordingPhase && (
@@ -382,6 +460,7 @@ export default function MeetingChat({ chatId = null, onCopy, onChatCreated, onRe
               ? <button type="button" className="meeting-secondary" onClick={pauseRecording} disabled={!canPause}><Pause size={16} />Pause</button>
               : <button type="button" className="meeting-secondary" onClick={resumeRecording}><Play size={16} />Resume</button>}
             <button type="button" className="meeting-stop-button" onClick={stopRecording}><Square size={14} />Stop Meeting</button>
+            <button type="button" className="meeting-secondary" onClick={() => setConfirmDiscard('recording')}><X size={14} />Cancel Recording</button>
           </div>
           {!canPause && <p className="meeting-hint">Pause/resume isn't supported in this browser - Stop Meeting still works.</p>}
         </div>
@@ -392,7 +471,23 @@ export default function MeetingChat({ chatId = null, onCopy, onChatCreated, onRe
           <LoaderCircle size={28} className="spin" />
           <p className="meeting-stage">{STAGE_LABEL[phase] || 'Uploading your recording...'}</p>
           <p className="meeting-hint">Your meeting is being processed. This may take a few minutes.</p>
+          <div className="meeting-controls">
+            <button type="button" className="meeting-secondary" onClick={() => setConfirmDiscard('processing')}><X size={14} />{phase === 'uploading' ? 'Cancel upload' : 'Cancel meeting'}</button>
+          </div>
         </div>
+      )}
+
+      {confirmDiscard && (
+        <ConfirmDiscardModal
+          title={confirmDiscard === 'recording' ? 'Cancel this recording?' : 'Cancel this meeting?'}
+          body={confirmDiscard === 'recording'
+            ? "The recording will be discarded and won't be uploaded or saved."
+            : "The current meeting will be discarded and won't be saved."}
+          keepLabel={confirmDiscard === 'recording' ? 'Keep recording' : 'Keep going'}
+          discardLabel={confirmDiscard === 'recording' ? 'Cancel recording' : 'Cancel meeting'}
+          onKeep={() => setConfirmDiscard(null)}
+          onDiscard={confirmDiscard === 'recording' ? discardRecording : discardProcessing}
+        />
       )}
 
       {phase === 'error' && (

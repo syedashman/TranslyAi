@@ -23,7 +23,7 @@ from app.schemas import (
 )
 from app.services.chat_store import user_id_from_token
 from app.services.meeting_chat_store import MeetingChatStore, MeetingChatStoreError
-from app.services.meeting_jobs import create_job, get_job
+from app.services.meeting_jobs import cancel_job, create_job, get_job
 from app.services.meeting_processor import process_meeting, process_meeting_upload
 from app.services.meeting_store import MeetingStore, MeetingStoreError
 from app.services.speech import SpeechService
@@ -160,6 +160,21 @@ async def meeting_status(meeting_id: str, token: str = Depends(bearer_token)):
     if job is None or job.get("user_id") is None or job["user_id"] != user_id_from_token(token):
         raise HTTPException(status_code=404, detail="Meeting not found.")
     return job
+
+
+@router.post("/{meeting_id}/cancel")
+async def cancel_meeting(meeting_id: str, token: str = Depends(bearer_token)):
+    """Cancel = DISCARD: a Record/Upload job that has not finished is stopped at its next stage boundary and nothing
+    is translated, summarized or saved from it. Only the owner can cancel. Once the result is being written (or is
+    written) it is too late: 409, and the meeting stays exactly as it is."""
+    job = get_job(meeting_id)
+    if job is None or job.get("user_id") is None or job["user_id"] != user_id_from_token(token):
+        raise HTTPException(status_code=404, detail="Meeting not found.")
+    outcome = cancel_job(meeting_id)
+    if outcome == "too_late":
+        raise HTTPException(status_code=409, detail="This meeting has already finished, so it can no longer be cancelled.")
+    await MeetingStore.discard(meeting_id)  # the queued placeholder row (never visible in history) goes too
+    return {"id": meeting_id, "status": "cancelled"}
 
 
 async def _store_call(call: Awaitable[T]) -> T:

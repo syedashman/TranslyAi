@@ -12,6 +12,7 @@ import { supabase } from './lib/supabase';
 
 const STAGE_TEXT = {
   waiting: 'Waiting for the host to start the meeting...',
+  paused: 'Meeting paused - the host will resume shortly.',
   host_disconnected: 'The host lost connection - waiting for them to come back...',
   finalizing: 'Meeting ended - finishing the last sentences...',
   translating: 'Meeting ended - translating...',
@@ -23,7 +24,7 @@ const STAGE_TEXT = {
 // screen permission: the only thing it can do is receive events. It renders standalone (see main.jsx), so none of
 // the host's private Meeting Chats or Translation chats are even loaded here.
 export default function LiveViewer({ shareToken }) {
-  const [phase, setPhase] = useState('connecting'); // connecting | live | ended | failed | unavailable
+  const [phase, setPhase] = useState('connecting'); // connecting | live | ended | failed | cancelled | unavailable
   const [unavailableReason, setUnavailableReason] = useState('');
   const [stage, setStage] = useState('waiting');
   const [segments, setSegments] = useState([]); // { id, text (Roman Urdu), translation }
@@ -41,6 +42,7 @@ export default function LiveViewer({ shareToken }) {
   const endRef = useRef(null);
   const startedAtRef = useRef(0);
   const stageRef = useRef('waiting');
+  const pausedAtRef = useRef(null);
   const finalRef = useRef(null);
   finalRef.current = final;
 
@@ -66,12 +68,16 @@ export default function LiveViewer({ shareToken }) {
         setSegments((event.segments || []).map((s) => ({ id: s.segment_id, text: s.text, translation: s.translation })));
         startedAtRef.current = Date.now() - (event.elapsed_seconds || 0) * 1000;
         stageRef.current = event.stage || 'waiting';
+        pausedAtRef.current = event.stage === 'paused' ? Date.now() : null;
         if (event.outcome === 'completed' && event.final) { setFinal(event.final); setPhase('ended'); }
         else if (event.outcome === 'failed') setPhase('failed');
+        else if (event.outcome === 'cancelled') { setSegments([]); setPhase('cancelled'); }
         else setPhase('live');
         break;
       case 'status':
         if (event.stage === 'live' && stageRef.current === 'waiting') startedAtRef.current = Date.now(); // the host just started
+        if (event.stage === 'paused' && stageRef.current !== 'paused') pausedAtRef.current = Date.now();
+        if (event.stage === 'live' && stageRef.current === 'paused' && pausedAtRef.current) { startedAtRef.current += Date.now() - pausedAtRef.current; pausedAtRef.current = null; } // the timer skips the pause
         stageRef.current = event.stage;
         setStage(event.stage);
         if (event.stage === 'live') setNotice('');
@@ -88,6 +94,7 @@ export default function LiveViewer({ shareToken }) {
       case 'error': if (event.fatal) setNotice(event.message || 'The live meeting had a problem and was stopped.'); break;
       case 'completed': setFinal(event.final); setPhase('ended'); break;
       case 'failed': setPhase('failed'); break;
+      case 'cancelled': setSegments([]); setPartial(''); setPartialPending(false); setPhase('cancelled'); break; // the host discarded it: nothing of it is kept here either
       default: break;
     }
   };
@@ -163,7 +170,7 @@ export default function LiveViewer({ shareToken }) {
         </header>
 
         <div className="live-head">
-          <span className={`live-badge ${isLive ? 'is-live' : ''}`}><span className="live-dot" aria-hidden="true" />{phase === 'ended' ? 'MEETING ENDED' : 'LIVE MEETING'}</span>
+          <span className={`live-badge ${isLive ? 'is-live' : ''}`}><span className="live-dot" aria-hidden="true" />{phase === 'ended' ? 'MEETING ENDED' : phase === 'cancelled' ? 'MEETING CANCELLED' : stage === 'paused' ? 'MEETING PAUSED' : 'LIVE MEETING'}</span>
           {phase === 'live' && stage === 'live' && <span className="meeting-timer live-timer">{formatDuration(elapsed)}</span>}
         </div>
         {connection === 'reconnecting' && phase !== 'ended' && <p className="live-notice"><LoaderCircle size={13} className="spin" />Connection lost - reconnecting...</p>}
@@ -172,6 +179,9 @@ export default function LiveViewer({ shareToken }) {
         {phase === 'connecting' && <div className="meeting-processing"><LoaderCircle size={26} className="spin" /><p className="meeting-stage">Joining live meeting...</p></div>}
         {phase === 'failed' && (
           <div className="meeting-error"><CircleAlert size={22} /><p>This live meeting ended unexpectedly.</p></div>
+        )}
+        {phase === 'cancelled' && (
+          <div className="meeting-error"><CircleAlert size={22} /><p>The host cancelled this meeting. It was not saved.</p></div>
         )}
 
         {(phase === 'live' || (phase === 'failed' && segments.length > 0)) && (

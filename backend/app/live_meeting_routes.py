@@ -78,6 +78,25 @@ async def create_live_meeting(body: Optional[LiveMeetingCreate] = None, token: s
             "share_token": session.share_token, "share_path": f"/?live={session.share_token}"}
 
 
+@router.post("/api/live-meetings/{meeting_id}/cancel")
+async def cancel_live_meeting(meeting_id: str, token: str = Depends(bearer_token)):
+    """Cancel = DISCARD (never finalize/save). Host only: same ownership rule as the WebSocket - someone else's id
+    and an unknown id both 404, never confirming that it exists. 409 only if the result is already saved."""
+    user_id = await live_meeting.verify_supabase_user(token)
+    session = live_meeting.get_session(meeting_id)
+    if session is None or user_id is None or user_id != session.user_id:
+        finished = live_meeting.find_share_by_meeting_id(meeting_id)
+        if finished is not None and user_id is not None and user_id == finished.user_id:
+            if finished.outcome == "completed":
+                raise HTTPException(status_code=409, detail="This meeting has already been saved, so it can no longer be cancelled.")
+            return {"id": meeting_id, "status": "cancelled"}  # idempotent: a retried cancel of a cancelled/failed meeting succeeds
+        raise HTTPException(status_code=404, detail="Live meeting not found.")
+    outcome = await session.cancel()
+    if outcome == "too_late":
+        raise HTTPException(status_code=409, detail="This meeting has already been saved, so it can no longer be cancelled.")
+    return {"id": meeting_id, "status": "cancelled"}
+
+
 @router.websocket("/ws/live-meeting/{meeting_id}")
 async def live_meeting_socket(ws: WebSocket, meeting_id: str):
     await ws.accept()
@@ -115,6 +134,12 @@ async def live_meeting_socket(ws: WebSocket, meeting_id: str):
                 kind = event.get("type") if isinstance(event, dict) else None
                 if kind == "stop":
                     await session.stop()
+                elif kind == "cancel":
+                    await session.cancel()
+                elif kind == "pause":
+                    await session.pause()
+                elif kind == "resume":
+                    await session.resume()
                 elif kind == "ping":
                     await session.send({"type": "pong"})
     except asyncio.TimeoutError:
