@@ -95,6 +95,10 @@ class MeetingStore:
                 "summary": job.get("summary"),
                 "error_message": job.get("error_message"),
             }
+            # Only Live Meeting jobs carry a source_type; recording/upload bodies stay exactly as they were, so a
+            # deployment that hasn't added the (optional) meetings.source_type column yet is unaffected.
+            if job.get("source_type"):
+                body["source_type"] = job["source_type"]
             result = await cls._request("POST", "/meetings", params={"on_conflict": "id"}, body=body)
         except Exception as error:
             print(f"MEETING STORE UPSERT FAILED (non-fatal, exception): id={job_id} error={error!r}")
@@ -105,6 +109,20 @@ class MeetingStore:
             return False
         print(f"MEETING STORE UPSERT OK: id={job_id} status={job.get('status')}")
         return True
+
+    @classmethod
+    async def fetch_by_id(cls, meeting_id: str) -> Optional[dict]:
+        """One COMPLETED meeting row by id, read with the service-role key. Server-side only, used by the Live
+        Meeting claim flow (which has already verified a signed claim token for exactly this id) - never exposed
+        through an endpoint that takes a bare id. Returns None if missing, not completed, or not configured."""
+        params = {"select": "id,status,duration_seconds,translation,summary",
+                  "id": f"eq.{meeting_id}", "status": "eq.completed"}
+        try:
+            rows = await cls._request("GET", "/meetings", params=params)
+        except Exception as error:
+            print(f"MEETING STORE FETCH FAILED: {error!r}")
+            return None
+        return rows[0] if rows else None
 
     # ---------- reads: the caller's OWN token, never the service-role key ----------
     # A read is always a short-lived request (no token-expiry risk like the background job's writes have), so

@@ -31,6 +31,14 @@ alter table public.meetings add column if not exists error_message    text;
 alter table public.meetings add column if not exists created_at       timestamptz not null default now();
 alter table public.meetings add column if not exists updated_at       timestamptz not null default now();
 
+-- Optional, additive: where a meeting result came from ('recording', 'upload' or 'live' for Live Meeting). Nullable
+-- with a default, so every existing row and every insert that omits it keeps working; Live Meeting still saves
+-- without this column (the backend retries the write without it), it just won't be tagged as live.
+alter table public.meetings add column if not exists source_type      text default 'recording';
+alter table public.meetings drop constraint if exists meetings_source_type_check;
+alter table public.meetings add constraint meetings_source_type_check
+  check (source_type is null or source_type in ('recording','upload','live'));
+
 create index if not exists meetings_user_order_idx on public.meetings (user_id, created_at desc);
 
 -- ---------- row-level security: each user only sees their own meetings ----------

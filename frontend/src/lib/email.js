@@ -5,7 +5,7 @@
 // The '**' strip matches the existing "Copy response" button, which already treats that as the plain-text form of
 // the summary for contexts outside the markdown-aware SummaryText renderer.
 export const buildEmailBody = (translation, summary) => {
-  const cleanSummary = (summary || '').replace(/\*\*/g, '').trim();
+  const cleanSummary = (summary || '').replace(/\*\*/g, '').replace(/^### /gm, '').trim();
   return cleanSummary ? `Translation:\n\n${translation}\n\nSummary:\n\n${cleanSummary}` : `Translation:\n\n${translation}`;
 };
 

@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { CircleAlert, Copy, LoaderCircle, Mail, Mic, Pause, Play, Square, Upload, Users } from 'lucide-react';
+import { CircleAlert, Copy, LoaderCircle, Mail, Mic, Pause, Play, Radio, Square, Upload, Users } from 'lucide-react';
 import { formatDuration } from './lib/duration';
 import { buildEmailBody, openGmailCompose } from './lib/email';
 import { describeError } from './lib/errors';
+import LiveMeeting from './LiveMeeting';
+import StructuredSummary from './StructuredSummary';
 import {
   generateMeetingChatTitle, getMeetingStatus, listMeetingChatResults, startMeeting, uploadMeetingRecording,
 } from './lib/meetingApi';
@@ -29,6 +31,7 @@ const STAGE_LABEL = {
   transcribing: 'Transcribing...',
   translating: 'Translating...',
   summarizing: 'Summarizing...',
+  live: 'Finishing your live meeting...', // only ever seen while polling a Live Meeting that is being wrapped up
 };
 
 function pickSupportedMimeType() {
@@ -53,7 +56,7 @@ function MeetingResultCard({ result, onCopy }) {
       </div>
       <div className="summary-card">
         <div className="summary-heading"><Users size={14} />Meeting summary</div>
-        <p>{result.summary}</p>
+        <StructuredSummary text={result.summary} />
       </div>
     </div>
   );
@@ -307,6 +310,14 @@ export default function MeetingChat({ chatId = null, onCopy, onChatCreated, onRe
     poll();
   };
 
+  // Live Meeting handed a stopped session back: from here it is an ordinary meeting job (the server finishes the
+  // last sentences, translates, summarizes and saves it) - the identical polling/result path a recording uses.
+  const handleLiveStopped = (jobId, savedChatId) => {
+    setError('');
+    setPhase('queued');
+    pollStatus(jobId, savedChatId);
+  };
+
   const retryUpload = () => {
     if (pickedFileRef.current) uploadPickedFile(pickedFileRef.current);
     else if (finalizedFileRef.current) uploadAndProcess(finalizedFileRef.current);
@@ -347,6 +358,7 @@ export default function MeetingChat({ chatId = null, onCopy, onChatCreated, onRe
           {error && <p className="meeting-error-line"><CircleAlert size={14} />{error}</p>}
           <div className="meeting-controls">
             <button type="button" className="meeting-start-button" onClick={startRecording}><Mic size={16} />Record Meeting</button>
+            <button type="button" className="meeting-secondary" onClick={() => { setError(''); setPhase('live_setup'); }}><Radio size={16} />Live Meeting</button>
             <button type="button" className="meeting-secondary" onClick={openUploadPicker}><Upload size={16} />Upload Recording</button>
           </div>
           <input
@@ -354,6 +366,10 @@ export default function MeetingChat({ chatId = null, onCopy, onChatCreated, onRe
             aria-label="Upload a recorded meeting video or audio file"
           />
         </div>
+      )}
+
+      {phase === 'live_setup' && (
+        <LiveMeeting chatId={chatIdRef.current} onCancel={() => setPhase('idle')} onStopped={handleLiveStopped} />
       )}
 
       {isRecordingPhase && (

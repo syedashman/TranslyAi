@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { LoaderCircle } from 'lucide-react';
 import App from './App';
 import AuthPage from './AuthPage';
+import { claimLiveMeeting, clearPendingClaim, readPendingClaim } from './lib/liveMeetingApi';
+import { generateMeetingChatTitle } from './lib/meetingApi';
 import { supabase } from './lib/supabase';
 import { hideSplash, wireBackButton } from './lib/native';
 
@@ -47,6 +49,27 @@ export default function AuthGate() {
     return () => { cancelled = true; };
   }, [userId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // A guest who chose "Sign up to save your meeting" on a shared Live Meeting left a pending claim in this browser
+  // (it survives email confirmation and the Google redirect). Once they are signed in, save that ONE meeting into
+  // their own account as a new Meeting Chat and open it. Anything unexpected just leaves the app as it was.
+  const [claimedChatId, setClaimedChatId] = useState(null);
+  useEffect(() => {
+    if (!userId) return undefined;
+    const claimToken = readPendingClaim();
+    if (!claimToken) return undefined;
+    let cancelled = false;
+    claimLiveMeeting(claimToken).then((result) => {
+      clearPendingClaim();
+      if (cancelled || !result.meeting_chat_id) return;
+      if (result.summary) generateMeetingChatTitle(result.meeting_chat_id, result.summary).catch(() => {});
+      setClaimedChatId(result.meeting_chat_id);
+    }).catch((error) => {
+      // 4xx = this claim can never succeed (expired/invalid) - drop it. Network/5xx: keep it for the next visit.
+      if (error.status && error.status < 500) clearPendingClaim();
+    });
+    return () => { cancelled = true; };
+  }, [userId]);
+
   if (session === undefined) return <div className="auth-shell"><LoaderCircle size={26} className="spin" /></div>;
   if (!session) {
     // The auth form opens over the guest chat, so the conversation is still there if the guest closes it.
@@ -75,5 +98,5 @@ export default function AuthGate() {
     avatar_url: avatarUrl ?? current?.avatar_url ?? null,
   }));
 
-  return <App key={account.id} user={account} onSignOut={() => supabase.auth.signOut()} onProfileChange={updateProfile} />;
+  return <App key={account.id} user={account} onSignOut={() => supabase.auth.signOut()} onProfileChange={updateProfile} openMeetingChatId={claimedChatId} />;
 }

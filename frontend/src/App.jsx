@@ -59,7 +59,7 @@ const pickGreeting = (previous) => {
   return options[Math.floor(Math.random() * options.length)];
 };
 
-function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfileChange }) {
+function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfileChange, openMeetingChatId = null }) {
   const [chats, setChats] = useState([]);
   // The URL is the source of truth for which chat to open, for guests too: a share link must work whether or not
   // the visitor is signed in. (Previously this was forced to null for guests, which is why a shared link opened
@@ -174,6 +174,16 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
     if (initialChatId) loadMessages(initialChatId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshChats]);
+
+  // A guest who watched a shared Live Meeting and signed up gets a saved copy in a NEW Meeting Chat of their own
+  // (see AuthGate's pending-claim handling); this just opens it. No-op unless AuthGate passes an id.
+  useEffect(() => {
+    if (!openMeetingChatId) return;
+    setHistoryTab('meetings');
+    setMeetingView({ chatId: openMeetingChatId });
+    refreshMeetingChats();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openMeetingChatId]);
 
   // Back/forward buttons move between the chats that were opened (own or shared; openChat/resetToNewChat are
   // both guest-safe, so this no longer needs to skip guests - skipping it here was the same bug as initialChatId

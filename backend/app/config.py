@@ -32,6 +32,39 @@ class Settings(BaseSettings):
     # (SpeechService.MAX_AUDIO_BYTES, unchanged). Default of 2048 MB (2 GB) comfortably covers a ~100-minute
     # meeting video at typical bitrates; raise via MEETING_VIDEO_MAX_MB in .env if needed.
     meeting_video_max_mb: int = 2048
+    # "Live Meeting" (browser tab audio -> WebSocket -> ElevenLabs Scribe v2 Realtime -> Gemini). All additive; none
+    # of these affect Record Meeting, Upload Recording or the batch STT path.
+    live_meeting_enabled: bool = True
+    # Largest single WebSocket message accepted from the browser (audio chunks are ~8 KB; this is generous headroom).
+    live_ws_max_message_size: int = 65536
+    # Finalized segments waiting for Gemini. Beyond this, segments are kept and translated as the queue drains.
+    live_translation_queue_size: int = 200
+    # 0 = no cap. The default (4 h) only exists so an abandoned session can never run forever.
+    live_meeting_max_duration_seconds: int = 4 * 60 * 60
+    # No message at all from the browser for this long = the connection is treated as dead.
+    live_ws_idle_timeout_seconds: int = 45
+    # How long a live session survives a dropped browser connection, waiting for the browser to reconnect, before
+    # it is finalized automatically with what was already captured.
+    live_reconnect_grace_seconds: int = 90
+    # Shared (read-only) viewing of a Live Meeting. The public link is separate from the host's private Meeting Chat:
+    # letting it expire never deletes anything the host saved.
+    # Language hint for the LIVE speech-to-text (ElevenLabs Scribe v2 Realtime). With NO hint Scribe auto-detects the
+    # language of each stretch of speech, and on short/accented Urdu-Hindi-English speech it can decide it is another
+    # language (e.g. Ukrainian) and then WRITES that language - which no later step can undo. "ur" (default, the same
+    # primary language the normal voice flow uses) makes Urdu/Hindi/mixed speech reliable; real English is still
+    # transcribed as English. Set LIVE_STT_LANGUAGE_CODE= (empty) to go back to pure auto-detect, or another ISO code.
+    live_stt_language_code: str = "ur"
+    # Server-log-only diagnostics for STT problems: per sentence, the language Scribe reports and the raw text -> what the
+    # Romanizer returned. Never sent to any client, never saved. Off by default.
+    live_stt_debug: bool = False
+    live_max_viewers: int = 200
+    # How long a FINISHED live meeting stays viewable through its share link (default 24 h).
+    live_share_ttl_seconds: int = 24 * 60 * 60
+    # How long a guest has to sign up and claim a copy of the meeting they watched (default 7 days).
+    live_claim_ttl_seconds: int = 7 * 24 * 60 * 60
+    # Signs claim tokens. Optional: if empty, a key derived from SUPABASE_SERVICE_ROLE_KEY is used, and if that is
+    # missing too a per-process random key (claims then don't survive a server restart).
+    live_claim_secret: str = ""
 
     model_config = SettingsConfigDict(
         env_file=ENV_FILE,
