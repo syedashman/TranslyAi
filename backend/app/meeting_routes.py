@@ -4,11 +4,13 @@ record rather than a one-off translation.
 """
 
 import asyncio
+import os
 from typing import Awaitable, Literal, Optional, TypeVar
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Response, UploadFile
 
+from app.config import settings
 from app.routes import bearer_token
 from app.schemas import (
     MeetingChatOut,
@@ -22,10 +24,11 @@ from app.schemas import (
 from app.services.chat_store import user_id_from_token
 from app.services.meeting_chat_store import MeetingChatStore, MeetingChatStoreError
 from app.services.meeting_jobs import create_job, get_job
-from app.services.meeting_processor import process_meeting
+from app.services.meeting_processor import process_meeting, process_meeting_upload
 from app.services.meeting_store import MeetingStore, MeetingStoreError
 from app.services.speech import SpeechService
 from app.services.titler import TitleService
+from app.services.video import SUPPORTED_UPLOAD_EXTENSIONS, SUPPORTED_VIDEO_EXTENSIONS
 
 T = TypeVar("T")
 
@@ -39,6 +42,12 @@ chats_router = APIRouter(prefix="/api/meeting-chats", tags=["meeting-chats"])
 # change) the existing 25 MB limit used by /api/audio and /api/transcribe. 300 MB comfortably covers 100 minutes
 # even at a generous bitrate (100 min of opus/webm at 128kbps is roughly 96 MB).
 MAX_MEETING_AUDIO_BYTES = 300 * 1024 * 1024
+
+# "Upload Recording" (a video or audio FILE, not a live browser recording) - separate, configurable limit since a
+# video container is naturally much bigger than an audio-only recording of the same length. See
+# Settings.meeting_video_max_mb (MEETING_VIDEO_MAX_MB env var, default 2048 MB) for why this default was chosen.
+# Never affects MAX_MEETING_AUDIO_BYTES above or SpeechService.MAX_AUDIO_BYTES (the short-voice limit).
+MAX_MEETING_VIDEO_BYTES = settings.meeting_video_max_mb * 1024 * 1024
 
 
 async def _chat_store_call(call: Awaitable[T]) -> T:
@@ -90,6 +99,54 @@ async def start_meeting(
 
     job = create_job(user_id, duration_seconds, meeting_chat_id=chat_id)
     background_tasks.add_task(process_meeting, job["id"], audio_path)
+    await MeetingStore.upsert(job)
+    return {"id": job["id"], "status": job["status"], "meeting_chat_id": chat_id}
+
+
+@router.post("/upload", response_model=MeetingCreateResponse, status_code=202)
+async def upload_meeting(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    meeting_chat_id: str | None = Form(default=None),
+    token: str = Depends(bearer_token),
+):
+    """"Upload Recording": accepts an already-recorded video (.mp4/.mov/.webm) or audio file instead of a live
+    browser recording - the second way to start a meeting result, alongside start_meeting above.
+
+    A video's audio track is extracted with FFmpeg in the background (see
+    app.services.meeting_processor.process_meeting_upload / app.services.video.VideoService) before running the
+    exact same transcribe/translate/summarize pipeline as start_meeting; a plain audio file upload skips
+    extraction entirely and goes straight into that same pipeline, exactly like a browser recording does. Same
+    response contract as start_meeting (returns immediately; meeting_chat_id says which Meeting Chat the result
+    will land in, whether that chat already existed or was just created for this upload).
+    """
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file uploaded.")
+    extension = os.path.splitext(file.filename)[1].lower()
+    if extension not in SUPPORTED_UPLOAD_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="Unsupported recording format.")
+
+    user_id = user_id_from_token(token)
+    if meeting_chat_id:
+        chat = _require_chat(await _chat_store_call(MeetingChatStore.get_chat(token, meeting_chat_id)))
+    else:
+        chat = await _chat_store_call(MeetingChatStore.create_chat(token, user_id))
+    chat_id = chat["id"]
+
+    try:
+        source_path = await SpeechService.save_upload(file, max_bytes=MAX_MEETING_VIDEO_BYTES)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        await file.close()
+
+    job = create_job(user_id, None, meeting_chat_id=chat_id)
+    if extension in SUPPORTED_VIDEO_EXTENSIONS:
+        background_tasks.add_task(process_meeting_upload, job["id"], source_path)
+    else:
+        # A plain audio file (mp3/wav/m4a/...) needs no FFmpeg step - it already goes straight into the same
+        # STT/translate/summarize pipeline a browser recording uses.
+        background_tasks.add_task(process_meeting, job["id"], source_path)
     await MeetingStore.upsert(job)
     return {"id": job["id"], "status": job["status"], "meeting_chat_id": chat_id}
 

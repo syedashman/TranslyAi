@@ -15,7 +15,7 @@ import time
 import uuid
 from typing import Optional
 
-STAGES = ("queued", "uploading", "transcribing", "translating", "summarizing", "completed", "failed")
+STAGES = ("queued", "uploading", "extracting_audio", "transcribing", "translating", "summarizing", "completed", "failed")
 
 _JOBS: dict[str, dict] = {}
 _MAX_JOBS = 500  # a simple cap so a long-running server doesn't accumulate unbounded memory from old jobs

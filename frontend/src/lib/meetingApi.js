@@ -42,6 +42,28 @@ export async function startMeeting(file, durationSeconds, meetingChatId, { signa
   }
 }
 
+// "Upload Recording": a video (.mp4/.mov/.webm) or audio file already sitting on the user's device, instead of a
+// live browser recording. Same response shape/contract as startMeeting above ({ id, status, meeting_chat_id })
+// and the same "attach to an existing chat or let the backend create one" meeting_chat_id behavior - only the
+// endpoint and the (larger, video-sized) upload timeout differ, since a video file can be much bigger than a
+// recorded-audio blob of the same length.
+export async function uploadMeetingRecording(file, meetingChatId, { signal } = {}) {
+  const headers = await authHeader();
+  const formData = new FormData();
+  formData.append('file', file);
+  if (meetingChatId) formData.append('meeting_chat_id', meetingChatId);
+  try {
+    const response = await axios.post(`${API_BASE_URL}/api/meetings/upload`, formData, {
+      headers: { ...headers, 'Content-Type': 'multipart/form-data' },
+      timeout: 15 * 60 * 1000, // a large video file can take much longer to upload than a short recording's blob
+      signal,
+    });
+    return response.data;
+  } catch (error) {
+    throw wrapError(error);
+  }
+}
+
 // Current stage while processing (queued/transcribing/translating/summarizing), or the finished
 // translation/summary once status is "completed", or error_message if "failed". Never includes the transcript -
 // the backend's response model deliberately excludes it (stored, never sent to the frontend).

@@ -19,6 +19,7 @@ from app.services.speech import SpeechService
 from app.services.summarizer import SummarizerService
 from app.services.text_chunking import chunk_text
 from app.services.translation import TranslationService
+from app.services.video import VideoExtractionError, VideoService
 
 logger = logging.getLogger("ai-translator")
 
@@ -148,3 +149,35 @@ async def process_meeting(job_id: str, audio_path: str) -> None:
             await _persist(job)
     finally:
         SpeechService.discard(audio_path)
+
+
+async def process_meeting_upload(job_id: str, source_path: str) -> None:
+    """Entry point for an uploaded video file ("Upload Recording" - see meeting_routes.upload_meeting). Extracts
+    the audio track with FFmpeg (VideoService.extract_audio) and then hands off to the exact same
+    process_meeting() pipeline used for a browser recording, completely unmodified from that point on - this
+    function's only job is turning a video into an audio file process_meeting() already knows how to handle.
+    """
+    try:
+        try:
+            update_job(job_id, status="extracting_audio")
+            audio_path = await VideoService.extract_audio(source_path)
+        finally:
+            # The source video is never needed again after this point, whether extraction succeeded or not, and
+            # is never stored permanently.
+            SpeechService.discard(source_path)
+    except VideoExtractionError as error:
+        logger.warning("MEETING VIDEO EXTRACTION FAILED (job %s): %s", job_id, error)
+        job = update_job(job_id, status="failed", error_message=str(error))
+        if job:
+            await _persist(job)
+        return
+    except Exception as error:
+        # Anything unexpected (not a recognized VideoExtractionError) still ends the job cleanly with a generic,
+        # non-leaking message rather than raising out of a background task and leaving the job stuck "processing".
+        logger.error("MEETING VIDEO EXTRACTION FAILED (job %s): %r", job_id, error)
+        job = update_job(job_id, status="failed", error_message="Unable to extract audio from this recording.")
+        if job:
+            await _persist(job)
+        return
+
+    await process_meeting(job_id, audio_path)

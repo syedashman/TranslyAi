@@ -1,11 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
-import { CircleAlert, Copy, LoaderCircle, Mail, Mic, Pause, Play, Square, Users } from 'lucide-react';
+import { CircleAlert, Copy, LoaderCircle, Mail, Mic, Pause, Play, Square, Upload, Users } from 'lucide-react';
 import { formatDuration } from './lib/duration';
 import { buildEmailBody, openGmailCompose } from './lib/email';
 import { describeError } from './lib/errors';
 import {
-  generateMeetingChatTitle, getMeetingStatus, listMeetingChatResults, startMeeting,
+  generateMeetingChatTitle, getMeetingStatus, listMeetingChatResults, startMeeting, uploadMeetingRecording,
 } from './lib/meetingApi';
+
+// "Upload Recording" file picker - video is the main new feature (its audio track is extracted server-side via
+// FFmpeg, see backend/app/services/video.py); plain audio files already work with the existing pipeline as-is.
+const UPLOAD_ACCEPT = 'video/mp4,video/quicktime,video/webm,audio/*';
 
 // AbortController-based cancellation surfaces as a DOMException named 'AbortError' or axios' own 'CanceledError'.
 function isCancelError(error) {
@@ -20,10 +24,11 @@ const CANDIDATE_MIME_TYPES = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg
 
 const STAGE_LABEL = {
   queued: 'Queued for processing...',
-  uploading: 'Uploading your recording...',
-  transcribing: 'Transcribing your meeting...',
-  translating: 'Translating the transcript...',
-  summarizing: 'Generating the summary...',
+  uploading: 'Uploading recording...',
+  extracting_audio: 'Extracting audio...',
+  transcribing: 'Transcribing...',
+  translating: 'Translating...',
+  summarizing: 'Summarizing...',
 };
 
 function pickSupportedMimeType() {
@@ -84,7 +89,9 @@ export default function MeetingChat({ chatId = null, onCopy, onChatCreated, onRe
   const timerRef = useRef(null);
   const pollTimeoutRef = useRef(null);
   const pollAbortRef = useRef(null);
-  const finalizedFileRef = useRef(null); // kept so a failed upload can be retried without re-recording
+  const finalizedFileRef = useRef(null); // kept so a failed RECORDING upload can be retried without re-recording
+  const pickedFileRef = useRef(null); // kept so a failed FILE upload can be retried without re-picking
+  const uploadInputRef = useRef(null);
   const closedRef = useRef(false);
   const chatIdRef = useRef(chatId); // the id to attach the NEXT recording to - starts at the prop, updated once a brand-new chat is created
 
@@ -222,6 +229,31 @@ export default function MeetingChat({ chatId = null, onCopy, onChatCreated, onRe
     }
   };
 
+  // "Upload Recording": a video or audio file already on the user's device, instead of a live browser recording.
+  // Reuses the exact same pollStatus/results-append/title-generation flow below - the backend hands back the
+  // same { id, meeting_chat_id } shape either way, so nothing past this point needs to know which path was used.
+  const openUploadPicker = () => { setError(''); uploadInputRef.current?.click(); };
+
+  const uploadPickedFile = async (file) => {
+    setPhase('uploading'); setError('');
+    pickedFileRef.current = file;
+    try {
+      const { id, meeting_chat_id: savedChatId } = await uploadMeetingRecording(file, chatIdRef.current);
+      if (closedRef.current) return;
+      pollStatus(id, savedChatId);
+    } catch (uploadError) {
+      if (closedRef.current) return;
+      setError(describeError(uploadError, 'Upload failed. Please try again.'));
+      setPhase('error');
+    }
+  };
+
+  const handleFileSelected = (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = ''; // allow picking the exact same file again later
+    if (file) uploadPickedFile(file);
+  };
+
   // Named jobId (not chatId) - this is always the id of a job just created by uploadAndProcess.
   const pollStatus = (jobId, savedChatId) => {
     const poll = async () => {
@@ -243,6 +275,7 @@ export default function MeetingChat({ chatId = null, onCopy, onChatCreated, onRe
           setPhase('idle');
           setElapsedSeconds(0);
           finalizedFileRef.current = null;
+          pickedFileRef.current = null;
 
           if (!chatIdRef.current) {
             // This was the very first recording of a brand-new Meeting Chat - the backend just created it.
@@ -275,7 +308,8 @@ export default function MeetingChat({ chatId = null, onCopy, onChatCreated, onRe
   };
 
   const retryUpload = () => {
-    if (finalizedFileRef.current) uploadAndProcess(finalizedFileRef.current);
+    if (pickedFileRef.current) uploadPickedFile(pickedFileRef.current);
+    else if (finalizedFileRef.current) uploadAndProcess(finalizedFileRef.current);
     else { setError(''); setPhase('idle'); }
   };
 
@@ -308,10 +342,17 @@ export default function MeetingChat({ chatId = null, onCopy, onChatCreated, onRe
       {!resultsLoading && !resultsError && phase === 'idle' && (
         <div className="meeting-idle">
           <p>{hasResults
-            ? 'Record another part of this meeting - TranslyAI will transcribe, translate, and summarize it and add it to this conversation.'
-            : 'Record a meeting (roughly 30-100 minutes) and TranslyAI will transcribe, translate, and summarize it once you stop. Typing is turned off while a meeting is open.'}</p>
+            ? 'Record or upload another part of this meeting - TranslyAI will transcribe, translate, and summarize it and add it to this conversation.'
+            : 'Record a meeting (roughly 30-100 minutes) or upload a recorded video/audio file, and TranslyAI will transcribe, translate, and summarize it. Typing is turned off while a meeting is open.'}</p>
           {error && <p className="meeting-error-line"><CircleAlert size={14} />{error}</p>}
-          <button type="button" className="meeting-start-button" onClick={startRecording}><Mic size={16} />Start Meeting</button>
+          <div className="meeting-controls">
+            <button type="button" className="meeting-start-button" onClick={startRecording}><Mic size={16} />Record Meeting</button>
+            <button type="button" className="meeting-secondary" onClick={openUploadPicker}><Upload size={16} />Upload Recording</button>
+          </div>
+          <input
+            ref={uploadInputRef} type="file" accept={UPLOAD_ACCEPT} onChange={handleFileSelected} hidden
+            aria-label="Upload a recorded meeting video or audio file"
+          />
         </div>
       )}
 
@@ -343,9 +384,9 @@ export default function MeetingChat({ chatId = null, onCopy, onChatCreated, onRe
           <CircleAlert size={22} />
           <p>{error || 'Something went wrong.'}</p>
           <div className="meeting-controls">
-            {finalizedFileRef.current && <button type="button" className="meeting-secondary" onClick={retryUpload}>Retry upload</button>}
-            <button type="button" className="meeting-start-button" onClick={() => { setError(''); setPhase('idle'); }}>
-              {finalizedFileRef.current ? 'Start a new meeting instead' : 'Try again'}
+            {(finalizedFileRef.current || pickedFileRef.current) && <button type="button" className="meeting-secondary" onClick={retryUpload}>Retry upload</button>}
+            <button type="button" className="meeting-start-button" onClick={() => { finalizedFileRef.current = null; pickedFileRef.current = null; setError(''); setPhase('idle'); }}>
+              {(finalizedFileRef.current || pickedFileRef.current) ? 'Start a new meeting instead' : 'Try again'}
             </button>
           </div>
         </div>

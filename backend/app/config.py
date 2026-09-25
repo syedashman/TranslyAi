@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     supabase_url: str = ""
     supabase_anon_key: str = ""
     supabase_service_role_key: str = ""
+    # "Upload Recording" (Meeting Chat video/audio file upload) size cap in MB - separate from the browser
+    # recording limit (meeting_routes.MAX_MEETING_AUDIO_BYTES, unchanged) and the short-voice 25 MB limit
+    # (SpeechService.MAX_AUDIO_BYTES, unchanged). Default of 2048 MB (2 GB) comfortably covers a ~100-minute
+    # meeting video at typical bitrates; raise via MEETING_VIDEO_MAX_MB in .env if needed.
+    meeting_video_max_mb: int = 2048
 
     model_config = SettingsConfigDict(
         env_file=ENV_FILE,
