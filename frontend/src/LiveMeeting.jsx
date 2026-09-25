@@ -321,16 +321,10 @@ export default function LiveMeeting({ chatId, onCancel, onStopped, onDiscarded }
   if (phase === 'setup') {
     return (
       <div className="meeting-idle live-setup">
-        <p>Open your meeting in a browser tab, then share that tab's audio and your microphone with TranslyAI.</p>
-        <ol className="live-steps">
-          <li>Click <strong>Share meeting audio + microphone</strong>.</li>
-          <li>In the browser's dialog choose <strong>Chrome Tab</strong>, pick your meeting tab (for example Google Meet), and tick <strong>Share tab audio</strong>.</li>
-          <li>Allow the <strong>microphone</strong> when asked - it is what lets your OWN speech be translated (the shared tab only carries the other participants).</li>
-        </ol>
-        <p className="live-examples">Tip: use headphones so the meeting audio isn't picked up twice by your microphone. Works with browser-based meetings and audio sources such as Zoom, Google Meet, Discord, Skype and WhatsApp Web. TranslyAI does not connect to these apps - you choose what to share in your browser's own dialog. Only you (the host) send audio; people you share the link with just watch.</p>
+        <p>Share your meeting audio and microphone to start live translation.</p>
         {error && <p className="meeting-error-line"><CircleAlert size={14} />{error}</p>}
         <div className="meeting-controls">
-          <button type="button" className="meeting-start-button" onClick={() => startLive()}><Radio size={16} />Share meeting audio + microphone</button>
+          <button type="button" className="meeting-start-button" onClick={() => startLive()}><Radio size={16} />Share Meeting</button>
           {micProblem && <button type="button" className="meeting-secondary" onClick={() => startLive({ micOptional: true })}><Mic size={16} />Continue without microphone</button>}
           <button type="button" className="meeting-secondary" onClick={onCancel}>Back</button>
         </div>
