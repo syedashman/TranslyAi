@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import { CircleAlert, Copy, LoaderCircle, Mail, Mic, Pause, Play, Square, Upload, Users, X } from 'lucide-react';
+import { CircleAlert, LoaderCircle, Mail, Mic, Pause, Play, Square, Upload, Users, X } from 'lucide-react';
 import ConfirmDiscardModal from './ConfirmDiscardModal';
 import { formatDuration } from './lib/duration';
 import { buildEmailBody, openGmailCompose } from './lib/email';
 import { describeError } from './lib/errors';
 import LiveMeeting from './LiveMeeting';
 import { cancelLiveMeeting } from './lib/liveMeetingApi';
+import CopyButton from './CopyButton';
 import ScrollToLatest from './ScrollToLatest';
 import StructuredSummary from './StructuredSummary';
 import { withBold } from './lib/richText';
@@ -57,7 +58,6 @@ function MeetingActions({ onRecord, onLive, onUpload, disabled = false, stacked 
 // One saved result inside the Meeting Chat's timeline - Translation + Summary only, same Copy/Email behavior as
 // the live "just completed" card had before. Never renders a transcript (the backend never even sends one).
 function MeetingResultCard({ result, onCopy }) {
-  const copyAll = () => onCopy(buildEmailBody(result.translation, result.summary), 'Meeting result copied');
   const emailAll = () => openGmailCompose('TranslyAI Meeting', buildEmailBody(result.translation, result.summary));
   return (
     <div className="meeting-result">
@@ -70,7 +70,7 @@ function MeetingResultCard({ result, onCopy }) {
         <StructuredSummary text={result.summary} />
       </div>
       <div className="response-actions">
-        <button type="button" className="response-action" aria-label="Copy response" title="Copy response" onClick={copyAll}><Copy size={15} /></button>
+        <CopyButton className="response-action" text={buildEmailBody(result.translation, result.summary)} onCopy={onCopy} label="Copy response" />
         <button type="button" className="response-action" aria-label="Email response" title="Email response" onClick={emailAll}><Mail size={15} /></button>
       </div>
     </div>

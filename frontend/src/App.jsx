@@ -3,13 +3,14 @@ import axios from 'axios';
 import ChatSidebar from './ChatSidebar';
 import DeleteModal from './DeleteModal';
 import MeetingChat from './MeetingChat';
+import CopyButton from './CopyButton';
 import ScrollToLatest from './ScrollToLatest';
 import { withBold } from './lib/richText';
 import { renameChat, renameMeetingChat } from './lib/renameApi';
 import ShareModal from './ShareModal';
 import VoiceBar from './VoiceBar';
 import {
-  ArrowUp, CircleAlert, Copy, LoaderCircle,
+  ArrowUp, CircleAlert, LoaderCircle,
   Mail, Menu, Mic, PanelLeftOpen, Paperclip, Pencil, Share, Sparkles, Users, X,
 } from 'lucide-react';
 import { API_BASE_URL } from './lib/config';
@@ -479,9 +480,11 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
     toastTimerRef.current = window.setTimeout(() => setToast(''), 2200);
   };
   useEffect(() => () => window.clearTimeout(toastTimerRef.current), []);
+  // label: the toast text, or null for no toast (the Copy icon confirms itself by turning into a tick - see CopyButton). Resolves to whether it worked.
   const copyWithToast = async (value, label = 'Copied to clipboard') => {
-    if (await copyText(value)) showToast(label);
-    else setError("Couldn't copy to the clipboard. Please copy it manually.");
+    if (await copyText(value)) { if (label) showToast(label); return true; }
+    setError("Couldn't copy to the clipboard. Please copy it manually.");
+    return false;
   };
 
   // Guests get GUEST_LIMIT free messages; the sign-up prompt opens when they are used up.
@@ -936,7 +939,7 @@ function Message({ message, editing, canEdit, onCopy, onStartEdit, onCancelEdit,
             : <div className="user-bubble">{message.audioName && !message.content && <span className="audio-badge"><Paperclip size={13} />{shortenFileName(message.audioName)}</span>}{message.content}</div>}
           {!editing && message.content && (
             <div className="user-actions">
-              <button type="button" aria-label="Copy message" title="Copy" onClick={() => onCopy(message.content)}><Copy size={14} /></button>
+              <CopyButton text={message.content} onCopy={onCopy} label="Copy" size={14} />
               <button type="button" aria-label="Edit message" title="Edit" disabled={!canEdit} onClick={() => onStartEdit(message.id)}><Pencil size={14} /></button>
             </div>
           )}
@@ -946,7 +949,7 @@ function Message({ message, editing, canEdit, onCopy, onStartEdit, onCancelEdit,
   }
   const { result } = message;
   if (!result) return null;
-  return <div className="message-row assistant-row"><div className="avatar assistant-avatar"><Sparkles size={15} /></div><div className="assistant-content"><div className="assistant-label">TranslyAi</div><div className="translation-card"><div className="result-heading"><span>English translation</span></div>{paragraphs(result.english_translation).map((paragraph, index) => <p key={index}>{withBold(paragraph)}</p>)}</div><div className="summary-card"><div className="summary-heading"><Sparkles size={14} />Summary</div><SummaryText text={result.summary} /></div><div className="response-actions"><button type="button" className="response-action" aria-label="Copy response" title="Copy response" onClick={() => onCopy(buildEmailBody(result.english_translation, result.summary), 'Response copied')}><Copy size={15} /></button><button type="button" className="response-action" aria-label="Email response" title="Email response" onClick={() => openGmailCompose('TranslyAI Translation', buildEmailBody(result.english_translation, result.summary))}><Mail size={15} /></button></div></div></div>;
+  return <div className="message-row assistant-row"><div className="avatar assistant-avatar"><Sparkles size={15} /></div><div className="assistant-content"><div className="assistant-label">TranslyAi</div><div className="translation-card"><div className="result-heading"><span>English translation</span></div>{paragraphs(result.english_translation).map((paragraph, index) => <p key={index}>{withBold(paragraph)}</p>)}</div><div className="summary-card"><div className="summary-heading"><Sparkles size={14} />Summary</div><SummaryText text={result.summary} /></div><div className="response-actions"><CopyButton className="response-action" text={buildEmailBody(result.english_translation, result.summary)} onCopy={onCopy} label="Copy response" /><button type="button" className="response-action" aria-label="Email response" title="Email response" onClick={() => openGmailCompose('TranslyAI Translation', buildEmailBody(result.english_translation, result.summary))}><Mail size={15} /></button></div></div></div>;
 }
 
 const paragraphs = (text) => String(text || '').split(/\n{2,}/).map((part) => part.trim()).filter(Boolean);
