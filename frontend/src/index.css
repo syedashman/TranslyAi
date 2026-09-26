@@ -46,7 +46,6 @@
   --danger-line: rgba(248, 113, 113, .35);
   --danger-solid: #DC2626;
   --danger-solid-hover: #B91C1C;
-  --warn: #FBBF24;
   --live: #EF4444;
 
   /* Shape, type, motion */
@@ -86,7 +85,6 @@
   --danger: #DC2626;
   --danger-soft: rgba(220, 38, 38, .08);
   --danger-line: rgba(220, 38, 38, .35);
-  --warn: #B45309;
 
   --shadow-pop: 0 12px 32px rgba(6, 6, 6, .14);
 }
@@ -482,7 +480,7 @@ button > svg { flex: none; }
 .meeting-recording { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 20px 4px 6px; text-align: center; }
 .meeting-rec-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--faint); }
 .meeting-rec-dot.is-live { background: var(--live); animation: meeting-pulse 1.4s ease-in-out infinite; }
-.meeting-rec-dot.is-paused { background: var(--warn); }
+.meeting-rec-dot.is-paused { background: var(--muted); }
 @keyframes meeting-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 .meeting-timer { color: var(--text); font-size: 38px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
 .meeting-rec-status { color: var(--muted); font-size: 12.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
@@ -511,7 +509,8 @@ button > svg { flex: none; }
 .live-status { margin: 0; color: var(--text); font-size: 13.5px; }
 .live-status span { color: var(--muted); }
 .live-source { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--muted); font-size: 12.5px; }
-.live-source.is-warn, .live-notice.is-warn { color: var(--warn); }
+.live-source.is-warn, .live-notice.is-warn { color: var(--text-2); }
+.live-source.is-warn svg, .live-notice.is-warn svg { flex: none; color: var(--accent-text); }
 .live-notice { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--muted); font-size: 12.5px; }
 .live-timeline { display: flex; flex-direction: column; gap: 12px; padding: 6px 0 4px; }
 .live-segment { padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); }
