@@ -98,6 +98,7 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
   const [guestCount, setGuestCount] = useState(getGuestCount);
   const [authPromptOpen, setAuthPromptOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null); // the chat waiting for delete confirmation
+  const [deleteMeetingTarget, setDeleteMeetingTarget] = useState(null); // the Meeting Chat waiting for delete confirmation
   const [shareOpen, setShareOpen] = useState(false);
   // Meeting Chat: an inline mode of the chat area (not a modal) - null means normal chat/new-chat is showing.
   // { chatId: null } = a brand-new, not-yet-saved Meeting Chat (idle, nothing recorded into it yet);
@@ -752,7 +753,7 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
         onRetryMeetings={refreshMeetingChats} activeMeetingChatId={meetingView?.chatId ?? null}
         onNewMeeting={startNewMeetingChat} onSelectMeeting={selectMeetingChat}
         onToggleMeetingPin={toggleMeetingChatPin} onToggleMeetingArchive={toggleMeetingChatArchive}
-        onDeleteMeeting={removeMeetingChat} onRenameMeeting={renameMeetingChatTitle}
+        onDeleteMeeting={setDeleteMeetingTarget} onRenameMeeting={renameMeetingChatTitle}
       />
       {/* Mobile only (hidden by CSS on larger screens): tapping the dimmed page closes the open sidebar. */}
       {sidebarOpen && <div className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} aria-hidden="true" />}
@@ -867,6 +868,7 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
         />
       )}
       {toast && <div className="toast" role="status">{toast}</div>}
+      {deleteMeetingTarget && <DeleteModal chat={deleteMeetingTarget} detail="Every meeting saved in it will be deleted too." onCancel={() => setDeleteMeetingTarget(null)} onConfirm={() => { const chat = deleteMeetingTarget; setDeleteMeetingTarget(null); removeMeetingChat(chat); }} />}
       {deleteTarget && <DeleteModal chat={deleteTarget} onCancel={() => setDeleteTarget(null)} onConfirm={() => { const chat = deleteTarget; setDeleteTarget(null); removeChat(chat); }} />}
       {guest && authPromptOpen && <AuthPrompt limitReached={limitReached} onClose={() => setAuthPromptOpen(false)} onRequestAuth={onRequestAuth} />}
     </div>

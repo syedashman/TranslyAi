@@ -150,9 +150,11 @@ export default function ChatSidebar({
 
   const term = query.trim().toLowerCase();
   const { pinned, recent, archived } = useMemo(() => groupByState(chats, term), [chats, term]);
-  const { pinned: meetingsPinned, recent: meetingsRecent, archived: meetingsArchived } = useMemo(() => groupByState(meetings, ''), [meetings]);
+  const { pinned: meetingsPinned, recent: meetingsRecent, archived: meetingsArchived } = useMemo(() => groupByState(meetings, term), [meetings, term]);
 
   const showArchived = archivedOpen || (term && archived.length > 0);
+  const showMeetingsArchived = meetingsArchivedOpen || (term && meetingsArchived.length > 0);
+  const meetingsNothingMatches = Boolean(term) && meetings.length > 0 && !meetingsPinned.length && !meetingsRecent.length && !meetingsArchived.length;
   const nothingMatches = !pinned.length && !recent.length && !archived.length;
   const menuChat = menu?.kind === 'chat' ? chats.find((chat) => chat.id === menu.chatId) : null;
   const menuMeeting = menu?.kind === 'meeting' ? meetings.find((chat) => chat.id === menu.chatId) : null;
@@ -181,9 +183,7 @@ export default function ChatSidebar({
       <div className="sidebar-header">
         <div className="brand"><BrandMark /><span>TranslyAi</span></div>
         <div className="sidebar-header-actions">
-          {historyTab === 'translations' && (
-            <button type="button" className={`icon-button ${searchOpen ? 'active' : ''}`} onClick={toggleSearch} aria-label="Search chats" aria-pressed={searchOpen}><Search size={18} /></button>
-          )}
+          <button type="button" className={`icon-button ${searchOpen ? 'active' : ''}`} onClick={toggleSearch} aria-label={historyTab === 'meetings' ? 'Search meetings' : 'Search chats'} aria-pressed={searchOpen}><Search size={18} /></button>
           <button type="button" className="icon-button" onClick={onClose} aria-label="Close sidebar"><PanelLeftClose size={18} /></button>
         </div>
       </div>
@@ -191,15 +191,15 @@ export default function ChatSidebar({
       <button type="button" className="new-chat-button" onClick={handleNewChat}><SquarePen size={17} />New chat</button>
 
       <div className="history-tabs" role="tablist" aria-label="History type">
-        <button type="button" role="tab" aria-selected={historyTab === 'translations'} className={`history-tab ${historyTab === 'translations' ? 'active' : ''}`} onClick={() => onHistoryTabChange('translations')}><MessageCircle size={14} />Translations</button>
-        <button type="button" role="tab" aria-selected={historyTab === 'meetings'} className={`history-tab ${historyTab === 'meetings' ? 'active' : ''}`} onClick={() => onHistoryTabChange('meetings')}><Users size={14} />Meetings</button>
+        <button type="button" role="tab" aria-selected={historyTab === 'translations'} className={`history-tab ${historyTab === 'translations' ? 'active' : ''}`} onClick={() => { setQuery(''); onHistoryTabChange('translations'); }}><MessageCircle size={14} />Translations</button>
+        <button type="button" role="tab" aria-selected={historyTab === 'meetings'} className={`history-tab ${historyTab === 'meetings' ? 'active' : ''}`} onClick={() => { setQuery(''); onHistoryTabChange('meetings'); }}><Users size={14} />Meetings</button>
       </div>
 
-      {historyTab === 'translations' && searchOpen && (
+      {searchOpen && (
         <div className="sidebar-search">
           <Search size={14} />
           <input
-            ref={searchInputRef} type="text" value={query} autoFocus placeholder="Search chats" aria-label="Search chats"
+            ref={searchInputRef} type="text" value={query} autoFocus placeholder={historyTab === 'meetings' ? 'Search meetings' : 'Search chats'} aria-label={historyTab === 'meetings' ? 'Search meetings' : 'Search chats'}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={(event) => { if (event.key === 'Escape') toggleSearch(); }}
           />
@@ -241,16 +241,17 @@ export default function ChatSidebar({
           {meetingsRecent.length > 0 && <div className="history-label">Recents</div>}
           {meetingsRecent.map(renderMeetingItem)}
 
+          {meetingsNothingMatches && <p className="empty-history">No meetings match "{query.trim()}".</p>}
           {!meetingsLoading && !meetingsError && !meetings.length && (
             <p className="empty-history">{guest ? 'Meetings are saved when you sign up.' : 'Your meeting chats will appear here.'}</p>
           )}
 
           {meetingsArchived.length > 0 && (
             <>
-              <button type="button" className="history-label archived-toggle" onClick={() => setMeetingsArchivedOpen((open) => !open)} aria-expanded={meetingsArchivedOpen}>
-                {meetingsArchivedOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}Archived ({meetingsArchived.length})
+              <button type="button" className="history-label archived-toggle" onClick={() => setMeetingsArchivedOpen((open) => !open)} aria-expanded={Boolean(showMeetingsArchived)}>
+                {showMeetingsArchived ? <ChevronDown size={12} /> : <ChevronRight size={12} />}Archived ({meetingsArchived.length})
               </button>
-              {meetingsArchivedOpen && meetingsArchived.map(renderMeetingItem)}
+              {showMeetingsArchived && meetingsArchived.map(renderMeetingItem)}
             </>
           )}
         </nav>
