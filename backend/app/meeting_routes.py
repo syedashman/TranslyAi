@@ -18,6 +18,7 @@ from app.schemas import (
     MeetingDetail,
     MeetingListItem,
     MeetingStatusResponse,
+    SharedMeetingChatView,
     TitleRequest,
     ToggleRequest,
 )
@@ -237,6 +238,25 @@ async def toggle_meeting_chat_archive(chat_id: UUID, body: Optional[ToggleReques
     archived = body.value if body and body.value is not None else not chat["is_archived"]
     fields = {"is_archived": archived, **({"is_pinned": False} if archived else {})}
     return _require_chat(await _chat_store_call(MeetingChatStore.update_chat(token, chat_id, fields)))
+
+
+@chats_router.patch("/{chat_id}/share", response_model=MeetingChatOut)
+async def toggle_meeting_chat_share(chat_id: UUID, body: Optional[ToggleRequest] = None, token: str = Depends(bearer_token)):
+    """Flips is_shared (or sets it from {"value": true|false}). Owner only: the chat is loaded and updated with the caller's
+    own token, and only the owner-only row-level security policy grants writes - same model as PATCH /api/chats/{id}/share."""
+    chat = _require_chat(await _chat_store_call(MeetingChatStore.get_chat(token, chat_id)))
+    shared = body.value if body and body.value is not None else not chat.get("is_shared", False)
+    return _require_chat(await _chat_store_call(MeetingChatStore.update_chat(token, chat_id, {"is_shared": shared})))
+
+
+@chats_router.get("/{chat_id}/shared", response_model=SharedMeetingChatView)
+async def get_shared_meeting_chat(chat_id: UUID):
+    """Public, login-free, READ-ONLY view of a Meeting Chat its owner explicitly shared - what a share link opens. No
+    Authorization header is used. Anything not shared 404s exactly like a private chat, so this can't probe which ids
+    exist. Only translation + summary per result are returned (never transcripts or owner ids)."""
+    chat = _require_chat(await _chat_store_call(MeetingChatStore.get_shared_chat(chat_id)))
+    results = await _chat_store_call(MeetingChatStore.list_shared_results(chat_id))
+    return {"chat": chat, "results": results}
 
 
 @chats_router.delete("/{chat_id}", status_code=204)

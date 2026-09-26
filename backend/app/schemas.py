@@ -85,8 +85,23 @@ class MeetingChatOut(BaseModel):
     title: str
     is_pinned: bool
     is_archived: bool
+    is_shared: bool = False  # default keeps working on a database that has not run the sharing migration yet
     created_at: str
     updated_at: str
+
+
+class SharedMeetingResult(BaseModel):
+    """One result inside a shared Meeting Chat: translation + summary only (no transcript, no owner ids)."""
+
+    id: str
+    translation: str = ""
+    summary: str = ""
+    created_at: str
+
+
+class SharedMeetingChatView(BaseModel):
+    chat: MeetingChatOut
+    results: list[SharedMeetingResult]
 
 
 class MeetingCreateResponse(BaseModel):

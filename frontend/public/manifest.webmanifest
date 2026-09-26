@@ -4,8 +4,8 @@
   "description": "Translate text and voice into clear English, then get a concise summary.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#212121",
-  "theme_color": "#18181b",
+  "background_color": "#060606",
+  "theme_color": "#060606",
   "icons": [
     {
       "src": "/icon-192.png",

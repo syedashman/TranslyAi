@@ -16,6 +16,7 @@ import asyncio
 import base64
 import json
 import logging
+import time
 from collections import deque
 from typing import Awaitable, Callable, Optional
 from urllib.parse import urlencode
@@ -36,6 +37,8 @@ VAD_SILENCE_SECONDS = 1.0
 # current over unbounded memory growth.
 MAX_BUFFERED_CHUNKS = 400
 MAX_RECONNECT_ATTEMPTS = 5
+# A handshake slower than this is abandoned and retried (a healthy one takes ~1 s) instead of leaving audio waiting.
+HANDSHAKE_TIMEOUT_SECONDS = 6.0
 # Error message types that retrying can never fix.
 FATAL_ERRORS = {"auth_error", "quota_exceeded", "invalid_api_key", "unauthorized"}
 
@@ -78,6 +81,9 @@ class LiveSTT:
         self._on_final = on_final
         self._on_error = on_error
         self._buffer: deque[bytes] = deque()
+        self._fed_at: deque[float] = deque()  # enqueue time of each buffered chunk (timing diagnostics only)
+        self.send_lag = 0.0  # age of the chunk most recently put on the wire: ~0 means the stream is real time
+        self.dropped_chunks = 0
         self._wake = asyncio.Event()
         self._task: Optional[asyncio.Task] = None
         self._closing = False
@@ -96,9 +102,18 @@ class LiveSTT:
         if self._closing or not pcm:
             return
         self._buffer.append(pcm)
+        self._fed_at.append(time.monotonic())
         while len(self._buffer) > MAX_BUFFERED_CHUNKS:
             self._buffer.popleft()
+            self._fed_at.popleft()
+            self.dropped_chunks += 1
+            if self.dropped_chunks == 1 or self.dropped_chunks % 100 == 0:
+                logger.warning("LIVE STT: upstream is slower than real time, %d chunk(s) dropped so far", self.dropped_chunks)
         self._wake.set()
+
+    @property
+    def buffered_chunks(self) -> int:
+        return len(self._buffer)
 
     def commit(self) -> None:
         """Asks the provider to finalize the sentence it is holding (used when the host pauses) without waiting for an
@@ -126,6 +141,7 @@ class LiveSTT:
     async def close(self) -> None:
         self._closing = True
         self._buffer.clear()
+        self._fed_at.clear()
         self._wake.set()
         ws = self._ws
         if ws is not None:
@@ -145,6 +161,7 @@ class LiveSTT:
     async def _run(self) -> None:
         attempts = 0
         while not self._closing:
+            connected = False
             try:
                 connected = await self._session()
                 if connected:
@@ -160,17 +177,21 @@ class LiveSTT:
             if attempts > MAX_RECONNECT_ATTEMPTS:
                 await self._on_error("The live transcription service disconnected and could not be restored.", True)
                 return
-            await asyncio.sleep(min(2 ** attempts, 15))
+            # A healthy session that simply ended is re-opened at once (audio is buffering meanwhile); only failed
+            # attempts back off: 1 s, 2 s, 4 s ...
+            await asyncio.sleep(0.2 if connected else min(2 ** (attempts - 1), 15))
 
     async def _session(self) -> bool:
         """One upstream connection. Returns True if the provider acknowledged the session (session_started)."""
         started = False
         headers = {"xi-api-key": _api_key()}
         logger.info("LIVE STT: connecting (language_code=%s)", settings.live_stt_language_code.strip() or "auto-detect")
+        began = time.monotonic()
         async with websockets.connect(
-            _build_url(), additional_headers=headers, max_size=2**22, ping_interval=20, ping_timeout=30,
+            _build_url(), additional_headers=headers, max_size=2**22, ping_interval=20, ping_timeout=30, open_timeout=HANDSHAKE_TIMEOUT_SECONDS,
         ) as ws:
             self._ws = ws
+            logger.info("LIVE STT: connected in %.1fs (%d chunk(s) waiting)", time.monotonic() - began, len(self._buffer))
             sender = asyncio.create_task(self._send_loop(ws))
             try:
                 async for raw in ws:
@@ -205,6 +226,8 @@ class LiveSTT:
                     await sender
                 except (asyncio.CancelledError, Exception):
                     pass
+                if not self._closing:
+                    logger.info("LIVE STT: upstream connection ended (close code=%s) after %.1fs", getattr(ws, "close_code", None), time.monotonic() - began)
         return started
 
     async def _send_loop(self, ws) -> None:
@@ -212,6 +235,8 @@ class LiveSTT:
         while True:
             while self._buffer:
                 chunk = self._buffer.popleft()
+                if self._fed_at:
+                    self.send_lag = time.monotonic() - self._fed_at.popleft()
                 await ws.send(json.dumps({
                     "message_type": "input_audio_chunk",
                     "audio_base_64": base64.b64encode(chunk).decode("ascii"),

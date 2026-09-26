@@ -2,14 +2,14 @@
   "appId": "com.translyai.app",
   "appName": "TranslyAi",
   "webDir": "dist",
-  "backgroundColor": "#18181b",
+  "backgroundColor": "#060606",
   "android": {
-    "backgroundColor": "#18181b"
+    "backgroundColor": "#060606"
   },
   "plugins": {
     "SplashScreen": {
       "launchShowDuration": 1200,
-      "backgroundColor": "#18181b",
+      "backgroundColor": "#060606",
       "androidSplashResourceName": "splash",
       "androidScaleType": "CENTER_CROP",
       "showSpinner": false
@@ -17,7 +17,7 @@
     "StatusBar": {
       "overlaysWebView": false,
       "style": "LIGHT",
-      "backgroundColor": "#18181b"
+      "backgroundColor": "#060606"
     }
   }
 }

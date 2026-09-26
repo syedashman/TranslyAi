@@ -25,6 +25,7 @@ import re
 import time
 import uuid
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 import httpx
@@ -42,6 +43,7 @@ from app.services.meeting_store import MeetingStore
 from app.services.romanizer import has_non_latin_letters, to_roman_script
 from app.services.summarizer import SummarizerService
 from app.services.text_chunking import chunk_text
+from app.services.translation import TranslationService
 
 logger = logging.getLogger("ai-translator")
 
@@ -49,7 +51,69 @@ logger = logging.getLogger("ai-translator")
 # as its original text instead of being dropped.
 DRAIN_TIMEOUT_SECONDS = 10 * 60.0
 ROMANIZE_ATTEMPTS = 3
-ROMANIZE_RETRY_DELAY_SECONDS = 2.0
+# Back-off between attempts for ONE sentence (progressive: an instant retry is pointless while the provider is throttling
+# or overloaded, but the batch pipeline's flat 5 s is too slow for a live sentence). Other sentences are unaffected.
+ROMANIZE_RETRY_DELAYS = (0.5, 4.0)
+LIVE_TRANSLATE_RETRY_DELAYS = (1.0, 6.0)
+# One Gemini call is abandoned (its sentence retried/failed) after this long, so a hung request can't hold a worker.
+LIVE_GEMINI_CALL_TIMEOUT_SECONDS = 30.0
+# Dedicated threads for live Gemini calls (blocking SDK): never starved by, and never starving, other server work.
+_LIVE_POOL = ThreadPoolExecutor(max_workers=48, thread_name_prefix="live-gemini")
+
+
+async def _hedged_call(fn, *args):
+    """Runs a blocking Gemini call in the live pool. If it is slower than settings.live_gemini_hedge_seconds ONE duplicate
+    is started and whichever finishes successfully first wins (Gemini latency is bimodal: ~1 s normally, 5-30 s when the
+    model is overloaded, so a duplicate usually beats the slow one). Raises if every attempt fails or the time limit passes."""
+    loop = asyncio.get_running_loop()
+    tasks = [asyncio.ensure_future(loop.run_in_executor(_LIVE_POOL, fn, *args))]
+    try:
+        hedge = settings.live_gemini_hedge_seconds
+        if hedge > 0:
+            done, _ = await asyncio.wait(tasks, timeout=hedge)
+            if not done:
+                tasks.append(asyncio.ensure_future(loop.run_in_executor(_LIVE_POOL, fn, *args)))
+        deadline = time.monotonic() + LIVE_GEMINI_CALL_TIMEOUT_SECONDS
+        pending = set(tasks)
+        last_error: Optional[BaseException] = None
+        while pending:
+            done, pending = await asyncio.wait(pending, timeout=max(0.01, deadline - time.monotonic()), return_when=asyncio.FIRST_COMPLETED)
+            if not done:
+                raise asyncio.TimeoutError("Gemini call timed out")
+            for task in done:
+                if task.exception() is None:
+                    return task.result()
+                last_error = task.exception()
+        raise last_error if last_error else RuntimeError("Gemini call failed")
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+            elif not task.cancelled():
+                task.exception()  # mark retrieved: a losing duplicate's error is not an 'unhandled task exception'
+
+
+def _translate_once(text: str) -> str:
+    translated, ok = TranslationService.translate_with_status(text, True)
+    if not ok:
+        raise RuntimeError(translated)
+    return translated
+
+
+async def _translate_live(text: str) -> str:
+    """The same TranslationService call as the batch pipeline, for ONE sentence only (no other context is ever sent), with
+    the live retry policy."""
+    last_error: Optional[BaseException] = None
+    for attempt in range(1, MEETING_GEMINI_RETRY_ATTEMPTS + 1):
+        try:
+            return await _hedged_call(_translate_once, text)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:  # noqa: BLE001
+            last_error = error
+            if attempt < MEETING_GEMINI_RETRY_ATTEMPTS:
+                await asyncio.sleep(LIVE_TRANSLATE_RETRY_DELAYS[min(attempt - 1, len(LIVE_TRANSLATE_RETRY_DELAYS) - 1)])
+    raise RuntimeError(f"Live translation failed after {MEETING_GEMINI_RETRY_ATTEMPTS} attempts: {last_error!r}")
 SEND_TIMEOUT_SECONDS = 5.0
 # A finished session's share entry is evicted oldest-first beyond this many (memory bound; text only).
 MAX_FINISHED_SHARES = 200
@@ -266,6 +330,13 @@ class LiveSession:
         self._host_lock = asyncio.Lock()
         self._stt: Optional[LiveSTT] = None
         self._roman_queue: asyncio.Queue = asyncio.Queue()
+        self._emit_index = 0  # segments before this index have been announced to clients, in spoken order
+        self._emit_lock = asyncio.Lock()
+        self._first_partial_at: Optional[float] = None
+        self._last_partial_at: Optional[float] = None
+        self._partial_payload: Optional[dict] = None  # newest partial not yet delivered (older ones are superseded)
+        self._partial_task: Optional[asyncio.Task] = None
+        self._final_seq = 0
         self._queue: asyncio.Queue = asyncio.Queue()  # stage 2 (translation)
         self._deferred: deque[dict] = deque()
         self._inflight = 0
@@ -431,10 +502,9 @@ class LiveSession:
         self.started_at = time.time()
         self._stt = LiveSTT(self._on_partial, self._on_final, self._on_stt_error)
         self._stt.start()
-        self._workers = [
-            asyncio.create_task(self._romanize_worker(), name="live-romanize"),
-            asyncio.create_task(self._translate_worker(), name="live-translate"),
-        ]
+        workers = max(1, settings.live_pipeline_workers)
+        self._workers = [asyncio.create_task(self._romanize_worker(), name=f"live-romanize-{i}") for i in range(workers)]
+        self._workers += [asyncio.create_task(self._translate_worker(), name=f"live-translate-{i}") for i in range(workers)]
         if settings.live_meeting_max_duration_seconds > 0:
             self._limit = asyncio.create_task(self._enforce_max_duration())
         update_job(self.job_id, status="live")
@@ -480,22 +550,55 @@ class LiveSession:
         if not text:
             return
         self._speech_since_final = True
+        now = time.monotonic()
+        if self._first_partial_at is None:
+            self._first_partial_at = now
+        self._last_partial_at = now
         if has_non_latin_letters(text):
             # Never show raw Devanagari/Arabic script: the Roman Urdu version is produced when the sentence is
             # finalized (romanizing every interim partial would mean a Gemini call several times a second).
             self.partial = ""
-            await self.broadcast({"type": "transcript_partial", "text": "", "pending": True})
+            self._queue_partial({"type": "transcript_partial", "text": "", "pending": True})
             return
         self.partial = text
-        await self.broadcast({"type": "transcript_partial", "text": text})
+        self._queue_partial({"type": "transcript_partial", "text": text})
+
+    def _queue_partial(self, payload: dict) -> None:
+        """Partials are cosmetic and superseded by the next one, so they are delivered by their own task with only the newest
+        kept. A slow host/viewer socket can therefore never hold up the STT receive loop (which also carries the finals)."""
+        self._partial_payload = payload
+        if self._partial_task is None or self._partial_task.done():
+            self._partial_task = asyncio.create_task(self._flush_partials(), name="live-partials")
+
+    async def _flush_partials(self) -> None:
+        while self._partial_payload is not None:
+            payload, self._partial_payload = self._partial_payload, None
+            try:
+                await self.broadcast(payload)
+            except Exception:  # noqa: BLE001 - cosmetic
+                pass
 
     async def _on_final(self, text: str) -> None:
         if not any(ch.isalnum() for ch in text):
             return  # garbled/empty STT output ("", "...", zero-width characters): nothing to romanize or translate
         self._speech_since_final = False
-        segment = {"segment_id": uuid.uuid4().hex, "original": text, "text": "", "romanized": False, "translation": None, "failed": False}
+        now = time.monotonic()
+        self._final_seq += 1
+        stt = self._stt
+        # Timing only - never any text. speech = first partial -> final; vad_wait = last partial -> final (the provider waits
+        # for a pause before it finalizes); stt_buf/send_lag = how far behind real time the audio going upstream is.
+        timing = {
+            "seq": self._final_seq, "final": now,
+            "speech": (now - self._first_partial_at) if self._first_partial_at else 0.0,
+            "vad_wait": (now - self._last_partial_at) if self._last_partial_at else 0.0,
+            "stt_buf": stt.buffered_chunks if stt else 0, "send_lag": stt.send_lag if stt else 0.0,
+        }
+        self._first_partial_at = self._last_partial_at = None
+        segment = {"segment_id": uuid.uuid4().hex, "original": text, "text": "", "romanized": False, "translation": None,
+                   "failed": False, "roman_done": False, "announced": False, "t": timing}
         self.segments.append(segment)
         self.partial = ""
+        self._partial_payload = None
         # Bounded backlog across BOTH stages: when Gemini is behind, the segment is parked (text only) instead of
         # growing the queues, and is released as earlier segments complete. STT is never blocked either way.
         if self._inflight >= settings.live_translation_queue_size:
@@ -521,21 +624,30 @@ class LiveSession:
                 logger.info("LIVE DEBUG romanizer: input is already Latin, passed through: %r", original)
             return original
         for attempt in range(1, ROMANIZE_ATTEMPTS + 1):
-            roman = await asyncio.to_thread(to_roman_script, original)
+            try:
+                roman = await _hedged_call(to_roman_script, original)
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:  # noqa: BLE001 - timed out / provider error: counts as a failed attempt
+                logger.warning("LIVE ROMANIZE: attempt %d/%d failed (%s)", attempt, ROMANIZE_ATTEMPTS, error.__class__.__name__)
+                roman = original
             if settings.live_stt_debug:
                 logger.info("LIVE DEBUG romanizer (attempt %d): input=%r output=%r", attempt, original, roman)
             if not has_non_latin_letters(roman):
                 return roman
             logger.warning("LIVE ROMANIZE: attempt %d/%d did not produce Roman text", attempt, ROMANIZE_ATTEMPTS)
             if attempt < ROMANIZE_ATTEMPTS:
-                await asyncio.sleep(ROMANIZE_RETRY_DELAY_SECONDS)
+                await asyncio.sleep(ROMANIZE_RETRY_DELAYS[min(attempt - 1, len(ROMANIZE_RETRY_DELAYS) - 1)])
         return ""
 
     async def _romanize_worker(self) -> None:
         # Self-healing: one bad/garbled segment (any error) must never kill this task - a dead worker would leave every
         # later sentence queued forever and stall finalization. The segment just gets an empty Speaker line.
+        # Several of these run at once (settings.live_pipeline_workers): each finalized sentence is romanized on its own,
+        # immediately, and its translation starts the moment its Roman text exists - independent of earlier sentences.
         while True:
             segment = await self._roman_queue.get()
+            segment["t"]["roman_start"] = time.monotonic()
             try:
                 segment["text"] = await self._romanize(segment["original"])
             except asyncio.CancelledError:
@@ -543,26 +655,78 @@ class LiveSession:
             except Exception as error:  # noqa: BLE001
                 logger.warning("LIVE ROMANIZE FAILED (meeting %s, segment %s): %r", self.job_id, segment["segment_id"], error)
                 segment["text"] = ""
-            segment["romanized"] = True
-            try:
-                await self.broadcast({"type": "transcript_final", "segment_id": segment["segment_id"], "text": segment["text"]})
-            except Exception:  # noqa: BLE001 - delivery problems never stop the pipeline
-                pass
+            segment["t"]["roman_end"] = time.monotonic()
+            segment["roman_done"] = True
             self._queue.put_nowait(segment)
+            await self._emit_ready()
+
+    async def _emit_ready(self) -> None:
+        """Announces sentences to the host and viewers strictly in SPOKEN order, however the concurrent workers finish: the
+        next sentence is only released once every earlier one has been. A translation that finished early is sent right
+        after its own sentence appears (the clients ignore a translation for a sentence they have not been shown yet)."""
+        async with self._emit_lock:
+            while self._emit_index < len(self.segments):
+                segment = self.segments[self._emit_index]
+                if not segment["roman_done"]:
+                    break
+                self._emit_index += 1
+                segment["romanized"] = True
+                segment["t"]["emitted"] = time.monotonic()
+                try:
+                    await self.broadcast({"type": "transcript_final", "segment_id": segment["segment_id"], "text": segment["text"]})
+                except Exception:  # noqa: BLE001 - delivery problems never stop the pipeline
+                    pass
+                segment["announced"] = True
+                await self._announce_translation(segment)
+        self._maybe_idle()
+
+    async def _announce_translation(self, segment: dict) -> None:
+        if segment["translation"] is not None:
+            segment["t"]["shown"] = time.monotonic()
+            self._log_timing(segment)
+            await self.broadcast({"type": "translation", "segment_id": segment["segment_id"], "text": segment["translation"]})
+        elif segment["failed"]:
+            await self.broadcast({"type": "translation_error", "segment_id": segment["segment_id"],
+                                  "message": "This sentence could not be translated right now."})
+
+    def _log_timing(self, segment: dict) -> None:
+        if not settings.live_timing_log:
+            return
+        t = segment["t"]
+        first = t["final"]
+        logger.info(
+            "LIVE TIMING segment=%d id=%s speech=%.1fs vad_wait=%.1fs | roman_queue=%.1fs romanizer=%.1fs translate_queue=%.1fs "
+            "translation=%.1fs emit_wait=%.1fs | after_final: text=%.1fs translation=%.1fs | inflight=%d stt_buf=%d send_lag=%.2fs",
+            t["seq"], segment["segment_id"][:8], t["speech"], t["vad_wait"],
+            t.get("roman_start", first) - first, t.get("roman_end", first) - t.get("roman_start", first),
+            t.get("tr_start", first) - t.get("roman_end", first), t.get("tr_end", first) - t.get("tr_start", first),
+            max(0.0, t.get("shown", first) - t.get("tr_end", first)),
+            t.get("emitted", first) - first, t.get("shown", first) - first, self._inflight, t["stt_buf"], t["send_lag"],
+        )
+
+    def _maybe_idle(self) -> None:
+        if self._inflight == 0 and not self._deferred and self._emit_index >= len(self.segments):
+            self._idle.set()
 
     # ---------- stage 2: English translation ----------
 
     async def _translate_segment(self, segment: dict) -> None:
+        segment["t"]["tr_start"] = time.monotonic()
         try:
-            text = await _translate_chunk_with_retry(segment["text"] or segment["original"], 0, 1)
+            text = await _translate_live(segment["text"] or segment["original"])
+        except asyncio.CancelledError:
+            raise
         except Exception as error:  # noqa: BLE001 - one bad segment must not stop the meeting
             segment["failed"] = True
+            segment["t"]["tr_end"] = time.monotonic()
             logger.warning("LIVE TRANSLATE FAILED (meeting %s, segment %s): %r", self.job_id, segment["segment_id"], error)
-            await self.broadcast({"type": "translation_error", "segment_id": segment["segment_id"],
-                                  "message": "This sentence could not be translated right now."})
+            if segment["announced"]:
+                await self._announce_translation(segment)
             return
         segment["translation"] = text
-        await self.broadcast({"type": "translation", "segment_id": segment["segment_id"], "text": text})
+        segment["t"]["tr_end"] = time.monotonic()
+        if segment["announced"]:  # otherwise _emit_ready sends it right after the sentence itself, in order
+            await self._announce_translation(segment)
 
     async def _translate_worker(self) -> None:
         while True:
@@ -578,8 +742,7 @@ class LiveSession:
             while self._deferred and self._inflight < settings.live_translation_queue_size:
                 self._inflight += 1
                 self._roman_queue.put_nowait(self._deferred.popleft())
-            if self._inflight == 0 and not self._deferred:
-                self._idle.set()
+            self._maybe_idle()
 
     # ---------- pause / resume (same session, same STT stream, same pipeline) ----------
 
@@ -593,6 +756,7 @@ class LiveSession:
         if self._stt is not None and self._speech_since_final:
             self._stt.commit()
         self.partial = ""
+        self._partial_payload = None
         await self.broadcast({"type": "transcript_partial", "text": ""})
         await self._set_stage("paused")
 

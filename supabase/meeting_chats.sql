@@ -76,5 +76,36 @@ create trigger on_meeting_result_created
   after insert on public.meetings
   for each row execute function public.touch_meeting_chat_on_result();
 
+-- ---------- sharing: same opt-in model as chats.sql (is_shared, owner-only toggle) ----------
+-- Only the owner can flip is_shared (the owner-only policy above is the only write policy). Once it is true, anyone with
+-- the link (the Meeting Chat's unguessable uuid) can READ that one chat - never change, delete or add to it.
+alter table public.meeting_chats add column if not exists is_shared boolean not null default false;
+alter table public.meeting_chats alter column is_shared set default false;
+
+drop policy if exists "Shared meeting chats are readable by anyone" on public.meeting_chats;
+create policy "Shared meeting chats are readable by anyone"
+  on public.meeting_chats for select
+  using (is_shared = true);
+
+-- The results of a shared chat are exposed ONLY through this function, which returns nothing but the public fields
+-- (never the private transcript column) and only for completed results of a chat flagged is_shared. There is
+-- deliberately no row-level select policy on public.meetings for this: that would let a direct table read see every column.
+create or replace function public.get_shared_meeting_results(p_chat_id uuid)
+returns table (id uuid, translation text, summary text, created_at timestamptz)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select m.id, m.translation, m.summary, m.created_at
+  from public.meetings m
+  join public.meeting_chats c on c.id = m.meeting_chat_id
+  where c.id = p_chat_id and c.is_shared = true and m.status = 'completed' and m.user_id = c.user_id
+  order by m.created_at asc;
+$$;
+
+revoke all on function public.get_shared_meeting_results(uuid) from public;
+grant execute on function public.get_shared_meeting_results(uuid) to anon, authenticated;
+
 -- Make the API notice the new table/column straight away.
 notify pgrst, 'reload schema';

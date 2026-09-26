@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
-import { CircleAlert, Copy, LoaderCircle, Mail, Mic, Pause, Play, Radio, Square, Upload, Users, X } from 'lucide-react';
+import { CircleAlert, Copy, LoaderCircle, Mail, Mic, Pause, Play, Square, Upload, Users, X } from 'lucide-react';
 import ConfirmDiscardModal from './ConfirmDiscardModal';
 import { formatDuration } from './lib/duration';
 import { buildEmailBody, openGmailCompose } from './lib/email';
 import { describeError } from './lib/errors';
 import LiveMeeting from './LiveMeeting';
 import { cancelLiveMeeting } from './lib/liveMeetingApi';
+import ScrollToLatest from './ScrollToLatest';
 import StructuredSummary from './StructuredSummary';
 import {
-  cancelMeetingJob, generateMeetingChatTitle, getMeetingStatus, listMeetingChatResults, startMeeting, uploadMeetingRecording,
+  cancelMeetingJob, fetchSharedMeetingChat, generateMeetingChatTitle, getMeetingStatus, listMeetingChatResults, startMeeting, uploadMeetingRecording,
 } from './lib/meetingApi';
 
 // "Upload Recording" file picker - video is the main new feature (its audio track is extracted server-side via
@@ -41,6 +42,17 @@ function pickSupportedMimeType() {
   return CANDIDATE_MIME_TYPES.find((type) => MediaRecorder.isTypeSupported(type)) || '';
 }
 
+// The three primary Meeting actions, one button family, stacked at the end of the history (or as the main focus of an empty chat).
+function MeetingActions({ onRecord, onLive, onUpload, disabled = false, stacked = false }) {
+  return (
+    <div className={`meeting-actions ${stacked ? 'is-stacked' : ''}`}>
+      <button type="button" className="meeting-secondary is-emphasis" onClick={onRecord} disabled={disabled}><Mic size={16} />Record Meeting</button>
+      <button type="button" className="meeting-start-button" onClick={onLive} disabled={disabled}><span className="live-indicator" aria-hidden="true" />Live Meeting</button>
+      <button type="button" className="meeting-secondary" onClick={onUpload} disabled={disabled}><Upload size={16} />Upload Recording</button>
+    </div>
+  );
+}
+
 // One saved result inside the Meeting Chat's timeline - Translation + Summary only, same Copy/Email behavior as
 // the live "just completed" card had before. Never renders a transcript (the backend never even sends one).
 function MeetingResultCard({ result, onCopy }) {
@@ -48,17 +60,17 @@ function MeetingResultCard({ result, onCopy }) {
   const emailAll = () => openGmailCompose('TranslyAI Meeting', buildEmailBody(result.translation, result.summary));
   return (
     <div className="meeting-result">
-      <div className="meeting-result-actions">
-        <button type="button" className="mini-action" aria-label="Copy meeting result" title="Copy" onClick={copyAll}><Copy size={14} /></button>
-        <button type="button" className="mini-action" aria-label="Email meeting result" title="Email" onClick={emailAll}><Mail size={14} /></button>
-      </div>
       <div className="translation-card">
         <div className="result-heading"><span>English translation</span></div>
         {result.translation.split(/\n{2,}/).filter(Boolean).map((paragraph, index) => <p key={index}>{paragraph}</p>)}
       </div>
       <div className="summary-card">
-        <div className="summary-heading"><Users size={14} />Meeting summary</div>
+        <div className="summary-heading"><Users size={14} />Summary</div>
         <StructuredSummary text={result.summary} />
+      </div>
+      <div className="response-actions">
+        <button type="button" className="response-action" aria-label="Copy response" title="Copy response" onClick={copyAll}><Copy size={15} /></button>
+        <button type="button" className="response-action" aria-label="Email response" title="Email response" onClick={emailAll}><Mail size={15} /></button>
       </div>
     </div>
   );
@@ -77,7 +89,10 @@ function MeetingResultCard({ result, onCopy }) {
 // clicking "New chat" on the Meetings tab) - the very first recording gets the backend to create the chat, and
 // onChatCreated tells App.jsx the new id so later recordings in the same session attach to it instead of each
 // creating their own new chat.
-export default function MeetingChat({ chatId = null, onCopy, onChatCreated, onResultSaved }) {
+// readOnly: someone else's SHARED Meeting Chat (opened from a share link): results come from the public shared endpoint and
+// none of the record/live/upload actions exist. title: the chat's title (owner view; a shared view reads it from the endpoint).
+export default function MeetingChat({ chatId = null, title = '', readOnly = false, onCopy, onChatCreated, onResultSaved, onResultsChange }) {
+  const [sharedTitle, setSharedTitle] = useState('');
   const [results, setResults] = useState([]);
   const [resultsLoading, setResultsLoading] = useState(Boolean(chatId));
   const [resultsError, setResultsError] = useState('');
@@ -141,18 +156,30 @@ export default function MeetingChat({ chatId = null, onCopy, onChatCreated, onRe
     setResultsLoading(true); setResultsError('');
     (async () => {
       try {
-        const rows = await listMeetingChatResults(chatId);
+        let rows;
+        if (readOnly) {
+          const shared = await fetchSharedMeetingChat(chatId);
+          if (cancelled) return;
+          setSharedTitle(shared.chat?.title || '');
+          rows = shared.results || [];
+        } else {
+          rows = await listMeetingChatResults(chatId);
+        }
         if (cancelled) return;
         setResults(rows.map((row) => ({ id: row.id, translation: row.translation || '', summary: row.summary || '' })));
       } catch (fetchError) {
         if (cancelled) return;
-        setResultsError(describeError(fetchError, "Couldn't load this meeting chat. Please try again."));
+        setResultsError(readOnly
+          ? "This shared meeting chat isn't available. The link may be wrong, or sharing was turned off."
+          : describeError(fetchError, "Couldn't load this meeting chat. Please try again."));
       } finally {
         if (!cancelled) setResultsLoading(false);
       }
     })();
     return () => { cancelled = true; };
-  }, [chatId, reloadTick]);
+  }, [chatId, reloadTick, readOnly]);
+
+  useEffect(() => { onResultsChange?.(results); }, [results]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const startRecording = async () => {
     setError(''); setInfo('');
@@ -401,14 +428,43 @@ export default function MeetingChat({ chatId = null, onCopy, onChatCreated, onRe
     else { setError(''); setPhase('idle'); }
   };
 
+  // The history is the only thing that scrolls (the conversation section itself). A panel for an active phase (recording, processing,
+  // live...) renders below the history, so when one starts the scroller is brought to it; a newly saved result likewise.
+  const scrollRef = useRef(null);
+  const previousPhaseRef = useRef(phase);
+  const previousResultCountRef = useRef(results.length);
+  useEffect(() => {
+    const scroller = scrollRef.current;
+    if (scroller && previousPhaseRef.current === 'idle' && phase !== 'idle') scroller.scrollTop = scroller.scrollHeight;
+    previousPhaseRef.current = phase;
+  }, [phase]);
+  useEffect(() => {
+    const scroller = scrollRef.current;
+    if (scroller && previousResultCountRef.current > 0 && results.length > previousResultCountRef.current) scroller.scrollTop = scroller.scrollHeight;
+    previousResultCountRef.current = results.length;
+  }, [results.length]);
+
   const isRecordingPhase = phase === 'recording' || phase === 'paused';
   const isProcessingPhase = phase === 'uploading' || Boolean(STAGE_LABEL[phase]);
   const hasResults = results.length > 0;
+  const openLiveSetup = () => { setError(''); setInfo(''); setPhase('live_setup'); };
+  const showActions = !readOnly && phase === 'idle' && !resultsLoading && !resultsError && hasResults;
+  const showEmptyState = !readOnly && phase === 'idle' && !resultsLoading && !resultsError && !hasResults;
+  const shownTitle = (readOnly ? sharedTitle : title) || '';
+  const heading = shownTitle && shownTitle !== 'New meeting' ? shownTitle : 'Meeting';
+  const statusLines = (
+    <>
+      {info && <p className="meeting-info-line" role="status">{info}</p>}
+      {error && <p className="meeting-error-line"><CircleAlert size={14} />{error}</p>}
+    </>
+  );
 
   return (
-    <section className="conversation meeting-chat" aria-live="polite">
+    <div className="scroll-pane">
+    <section className="conversation meeting-chat" aria-live="polite" ref={scrollRef}>
       <div className="meeting-head">
-        <h2><Users size={18} /> Meeting</h2>
+        <h2><Users size={18} /> {heading}</h2>
+        {hasResults && <span className="meeting-count">{results.length} {results.length === 1 ? 'meeting' : 'meetings'}</span>}
       </div>
 
       {resultsLoading && (
@@ -427,23 +483,28 @@ export default function MeetingChat({ chatId = null, onCopy, onChatCreated, onRe
         </div>
       )}
 
-      {!resultsLoading && !resultsError && phase === 'idle' && (
-        <div className="meeting-idle">
-          <p>{hasResults
-            ? 'Record or upload another part of this meeting - TranslyAI will transcribe, translate, and summarize it and add it to this conversation.'
-            : 'Record a meeting (roughly 30-100 minutes) or upload a recorded video/audio file, and TranslyAI will transcribe, translate, and summarize it. Typing is turned off while a meeting is open.'}</p>
-          {info && <p className="meeting-info-line" role="status">{info}</p>}
-          {error && <p className="meeting-error-line"><CircleAlert size={14} />{error}</p>}
-          <div className="meeting-controls">
-            <button type="button" className="meeting-start-button" onClick={startRecording}><Mic size={16} />Record Meeting</button>
-            <button type="button" className="meeting-secondary" onClick={() => { setError(''); setInfo(''); setPhase('live_setup'); }}><Radio size={16} />Live Meeting</button>
-            <button type="button" className="meeting-secondary" onClick={openUploadPicker}><Upload size={16} />Upload Recording</button>
-          </div>
-          <input
-            ref={uploadInputRef} type="file" accept={UPLOAD_ACCEPT} onChange={handleFileSelected} hidden
-            aria-label="Upload a recorded meeting video or audio file"
-          />
+      {showActions && (
+        <div className="meeting-actions-block">
+          {statusLines}
+          <MeetingActions onRecord={startRecording} onLive={openLiveSetup} onUpload={openUploadPicker} stacked />
         </div>
+      )}
+
+      {readOnly && !resultsLoading && !resultsError && !hasResults && <p className="meeting-readonly-empty">This meeting chat has no results yet.</p>}
+
+      {showEmptyState && (
+        <div className="meeting-empty">
+          <h3>Ready when you are.</h3>
+          <p>Record a meeting, go live, or upload a recording - TranslyAI will transcribe, translate and summarize it.</p>
+          {statusLines}
+          <MeetingActions onRecord={startRecording} onLive={openLiveSetup} onUpload={openUploadPicker} stacked />
+        </div>
+      )}
+      {!readOnly && phase === 'idle' && (
+        <input
+          ref={uploadInputRef} type="file" accept={UPLOAD_ACCEPT} onChange={handleFileSelected} hidden
+          aria-label="Upload a recorded meeting video or audio file"
+        />
       )}
 
       {phase === 'live_setup' && (
@@ -503,5 +564,7 @@ export default function MeetingChat({ chatId = null, onCopy, onChatCreated, onRe
         </div>
       )}
     </section>
+    <ScrollToLatest scrollRef={scrollRef} hidden={phase === 'live_setup'} />
+    </div>
   );
 }

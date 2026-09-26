@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Archive, ArchiveRestore, ChevronDown, ChevronRight, LoaderCircle, MessageCircle, MoreHorizontal,
-  PanelLeftClose, Pin, PinOff, Search, SquarePen, Trash2, Users, X,
+  PanelLeftClose, Pencil, Pin, PinOff, Search, SquarePen, Trash2, Users, X,
 } from 'lucide-react';
 import AccountMenu from './AccountMenu';
 import BrandMark from './BrandMark';
@@ -10,9 +10,9 @@ import { CTA_LOGIN, CTA_SIGNUP } from './lib/authCta';
 
 const MENU_WIDTH = 190;
 
-// Generic pin/archive/delete menu - used for both a Translation chat and a Meeting Chat (they only differ in
-// which onTogglePin/onToggleArchive/onDelete callbacks the caller passes in).
-function ChatMenu({ chat, anchor, onClose, onTogglePin, onToggleArchive, onDelete }) {
+// Generic pin/archive/rename/delete menu - used for both a Translation chat and a Meeting Chat (they only differ in
+// which callbacks the caller passes in).
+function ChatMenu({ chat, anchor, onClose, onTogglePin, onToggleArchive, onRename, onDelete }) {
   const menuRef = useRef(null);
 
   useEffect(() => {
@@ -31,7 +31,7 @@ function ChatMenu({ chat, anchor, onClose, onTogglePin, onToggleArchive, onDelet
   }, [onClose]);
 
   const rect = anchor.getBoundingClientRect();
-  const estimatedHeight = chat.is_archived ? 92 : 132;
+  const estimatedHeight = chat.is_archived ? 132 : 172;
   const flipUp = rect.bottom + estimatedHeight + 8 > window.innerHeight;
   const width = Math.min(MENU_WIDTH, window.innerWidth - 16);
   const style = {
@@ -44,11 +44,14 @@ function ChatMenu({ chat, anchor, onClose, onTogglePin, onToggleArchive, onDelet
     <div className="chat-menu" role="menu" ref={menuRef} style={style}>
       {!chat.is_archived && (
         <button type="button" role="menuitem" onClick={() => { onTogglePin(chat); onClose(); }}>
-          {chat.is_pinned ? <PinOff size={15} /> : <Pin size={15} />}{chat.is_pinned ? 'Unpin' : 'Pin'}
+          {chat.is_pinned ? <PinOff size={15} /> : <Pin size={15} />}{chat.is_pinned ? 'Unpin Chat' : 'Pin Chat'}
         </button>
       )}
       <button type="button" role="menuitem" onClick={() => { onToggleArchive(chat); onClose(); }}>
-        {chat.is_archived ? <ArchiveRestore size={15} /> : <Archive size={15} />}{chat.is_archived ? 'Unarchive' : 'Archive'}
+        {chat.is_archived ? <ArchiveRestore size={15} /> : <Archive size={15} />}{chat.is_archived ? 'Unarchive Chat' : 'Archive Chat'}
+      </button>
+      <button type="button" role="menuitem" onClick={() => { onRename(chat); onClose(); }}>
+        <Pencil size={15} />Rename Chat
       </button>
       <button
         type="button"
@@ -56,8 +59,40 @@ function ChatMenu({ chat, anchor, onClose, onTogglePin, onToggleArchive, onDelet
         className="danger"
         onClick={() => { onDelete(chat); onClose(); }}
       >
-        <Trash2 size={15} />Delete
+        <Trash2 size={15} />Delete Chat
       </button>
+    </div>,
+    document.body,
+  );
+}
+
+// Small rename dialog (same modal look as the rest of the app): pre-filled with the current name, Save is only enabled for a
+// new, non-empty name of at most 120 characters.
+function RenameModal({ chat, onSave, onCancel }) {
+  const [value, setValue] = useState(chat.title);
+  const inputRef = useRef(null);
+  const cancelRef = useRef(onCancel);
+  cancelRef.current = onCancel;
+  useEffect(() => {
+    inputRef.current?.focus();
+    inputRef.current?.select();
+    const onKeyDown = (event) => { if (event.key === 'Escape') cancelRef.current(); };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, []);
+  const trimmed = value.trim();
+  const canSave = trimmed.length > 0 && trimmed !== chat.title;
+  const submit = (event) => { event.preventDefault(); if (canSave) onSave(trimmed); };
+  return createPortal(
+    <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onCancel(); }}>
+      <form className="modal rename-modal" role="dialog" aria-modal="true" aria-labelledby="rename-title" onSubmit={submit}>
+        <div className="modal-header"><h2 id="rename-title">Rename chat</h2></div>
+        <input ref={inputRef} className="rename-input" type="text" value={value} maxLength={120} aria-label="Chat name" onChange={(event) => setValue(event.target.value)} />
+        <div className="modal-actions">
+          <button type="button" className="btn btn-secondary" onClick={onCancel}>Cancel</button>
+          <button type="submit" className="btn btn-primary" disabled={!canSave}>Save</button>
+        </div>
+      </form>
     </div>,
     document.body,
   );
@@ -97,19 +132,20 @@ function groupByState(list, term) {
 
 export default function ChatSidebar({
   chats, loading, error, onRetry, activeId, isOpen, user, guest = false, onRequestAuth = () => {},
-  onSignOut, onProfileChange, onNew, onSelect, onClose, onTogglePin, onToggleArchive, onDelete,
+  onSignOut, onProfileChange, onNew, onSelect, onClose, onTogglePin, onToggleArchive, onDelete, onRenameChat = () => {},
   historyTab = 'translations', onHistoryTabChange = () => {},
   // Meeting Chats: same shape/behavior as chats (id/title/is_pinned/is_archived), just a separate list and a
   // separate set of callbacks - see App.jsx's meetingChats state and toggleMeetingChatPin/etc handlers.
   meetings = [], meetingsLoading = false, meetingsError = '', onRetryMeetings,
   activeMeetingChatId = null, onNewMeeting = () => {}, onSelectMeeting = () => {},
-  onToggleMeetingPin = () => {}, onToggleMeetingArchive = () => {}, onDeleteMeeting = () => {},
+  onToggleMeetingPin = () => {}, onToggleMeetingArchive = () => {}, onDeleteMeeting = () => {}, onRenameMeeting = () => {},
 }) {
   const [query, setQuery] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
   const [archivedOpen, setArchivedOpen] = useState(false);
   const [meetingsArchivedOpen, setMeetingsArchivedOpen] = useState(false);
   const [menu, setMenu] = useState(null); // { kind: 'chat' | 'meeting', chatId, anchor }
+  const [renameTarget, setRenameTarget] = useState(null); // { kind: 'chat' | 'meeting', chat }
   const searchInputRef = useRef(null);
 
   const term = query.trim().toLowerCase();
@@ -155,8 +191,8 @@ export default function ChatSidebar({
       <button type="button" className="new-chat-button" onClick={handleNewChat}><SquarePen size={17} />New chat</button>
 
       <div className="history-tabs" role="tablist" aria-label="History type">
-        <button type="button" role="tab" aria-selected={historyTab === 'translations'} className={`history-tab ${historyTab === 'translations' ? 'active' : ''}`} onClick={() => onHistoryTabChange('translations')}>Translations</button>
-        <button type="button" role="tab" aria-selected={historyTab === 'meetings'} className={`history-tab ${historyTab === 'meetings' ? 'active' : ''}`} onClick={() => onHistoryTabChange('meetings')}>Meetings</button>
+        <button type="button" role="tab" aria-selected={historyTab === 'translations'} className={`history-tab ${historyTab === 'translations' ? 'active' : ''}`} onClick={() => onHistoryTabChange('translations')}><MessageCircle size={14} />Translations</button>
+        <button type="button" role="tab" aria-selected={historyTab === 'meetings'} className={`history-tab ${historyTab === 'meetings' ? 'active' : ''}`} onClick={() => onHistoryTabChange('meetings')}><Users size={14} />Meetings</button>
       </div>
 
       {historyTab === 'translations' && searchOpen && (
@@ -221,10 +257,16 @@ export default function ChatSidebar({
       )}
 
       {menu && menuChat && (
-        <ChatMenu chat={menuChat} anchor={menu.anchor} onClose={closeMenu} onTogglePin={onTogglePin} onToggleArchive={onToggleArchive} onDelete={onDelete} />
+        <ChatMenu chat={menuChat} anchor={menu.anchor} onClose={closeMenu} onTogglePin={onTogglePin} onToggleArchive={onToggleArchive} onRename={(chat) => setRenameTarget({ kind: 'chat', chat })} onDelete={onDelete} />
       )}
       {menu && menuMeeting && (
-        <ChatMenu chat={menuMeeting} anchor={menu.anchor} onClose={closeMenu} onTogglePin={onToggleMeetingPin} onToggleArchive={onToggleMeetingArchive} onDelete={onDeleteMeeting} />
+        <ChatMenu chat={menuMeeting} anchor={menu.anchor} onClose={closeMenu} onTogglePin={onToggleMeetingPin} onToggleArchive={onToggleMeetingArchive} onRename={(chat) => setRenameTarget({ kind: 'meeting', chat })} onDelete={onDeleteMeeting} />
+      )}
+      {renameTarget && (
+        <RenameModal
+          chat={renameTarget.chat} onCancel={() => setRenameTarget(null)}
+          onSave={(title) => { (renameTarget.kind === 'meeting' ? onRenameMeeting : onRenameChat)(renameTarget.chat, title); setRenameTarget(null); }}
+        />
       )}
 
       {guest ? (

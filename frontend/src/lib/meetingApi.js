@@ -115,6 +115,27 @@ export async function createMeetingChat() {
   }
 }
 
+// Owner only (bearer token): turn the share link on/off - same model as chatApi's setShared.
+export async function setMeetingChatShared(chatId, value) {
+  const headers = await authHeader();
+  try {
+    const response = await axios.patch(`${API_BASE_URL}/api/meeting-chats/${chatId}/share`, { value }, { headers, timeout: 30000 });
+    return response.data;
+  } catch (error) {
+    throw wrapError(error);
+  }
+}
+
+// Public and login-free (no Authorization header at all): the read-only view a share link opens - { chat, results }.
+export async function fetchSharedMeetingChat(chatId, { signal } = {}) {
+  try {
+    const response = await axios.get(`${API_BASE_URL}/api/meeting-chats/${chatId}/shared`, { timeout: 30000, signal });
+    return response.data;
+  } catch (error) {
+    throw wrapError(error);
+  }
+}
+
 export async function setMeetingChatPinned(chatId, value) {
   const headers = await authHeader();
   try {

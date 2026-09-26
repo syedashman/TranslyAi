@@ -212,7 +212,7 @@ export default function LiveViewer({ shareToken }) {
               {final.segments.map((segment) => <p key={segment.segment_id}>{segment.translation}</p>)}
             </div>
             <div className="summary-card">
-              <div className="summary-heading"><Users size={14} />Meeting summary</div>
+              <div className="summary-heading"><Users size={14} />Summary</div>
               <StructuredSummary text={final.summary} />
             </div>
 

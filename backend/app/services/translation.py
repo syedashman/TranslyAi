@@ -83,7 +83,7 @@ TEXT_TRANSLATION_SYSTEM_INSTRUCTION = (
 
 
 class TranslationService:
-    _gemini_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="gemini-translation")
+    _gemini_executor = ThreadPoolExecutor(max_workers=16, thread_name_prefix="gemini-translation")
     _gemini_timeout_seconds = 60
     _fallback_message = "Translation is temporarily unavailable. Please try again later."
 

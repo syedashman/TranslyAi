@@ -14,9 +14,11 @@ const RedditLogo = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="c
 const clip = (text) => (text.length > PREVIEW_CHARS ? `${text.slice(0, PREVIEW_CHARS).trimEnd()}...` : text);
 
 // Share dialog: a glass preview card of the chat plus quick actions for the chat's link.
-export default function ShareModal({ chat, messages, onClose, onCopied, onError, onToggleShare }) {
+// noun: 'chat' (Translation Chat) or 'meeting chat'; previewItems: optional [{ id, who, text }] replacing the message-based preview.
+export default function ShareModal({ chat, messages = [], previewItems = null, noun = 'chat', onClose, onCopied, onError, onToggleShare }) {
   const [copied, setCopied] = useState(false);
   const [sharing, setSharing] = useState(false);
+  const [shareError, setShareError] = useState('');
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
   const timerRef = useRef(null);
@@ -26,8 +28,10 @@ export default function ShareModal({ chat, messages, onClose, onCopied, onError,
   const isShared = Boolean(chat.is_shared);
 
   const flipShare = async () => {
-    setSharing(true);
-    try { await onToggleShare(!isShared); } finally { setSharing(false); }
+    setSharing(true); setShareError('');
+    try { await onToggleShare(!isShared); }
+    catch (error) { setShareError(`Couldn't ${isShared ? 'turn off' : 'turn on'} sharing. ${error?.message || 'Please try again.'}`); }
+    finally { setSharing(false); }
   };
 
   useEffect(() => {
@@ -36,7 +40,7 @@ export default function ShareModal({ chat, messages, onClose, onCopied, onError,
     return () => { window.removeEventListener('keydown', onKeyDown); window.clearTimeout(timerRef.current); };
   }, []);
 
-  const preview = messages
+  const preview = previewItems || messages
     .filter((message) => (message.role === 'user' ? message.content || message.audioName : message.result?.english_translation))
     .slice(0, PREVIEW_LIMIT)
     .map((message) => (message.role === 'user'
@@ -64,7 +68,7 @@ export default function ShareModal({ chat, messages, onClose, onCopied, onError,
     <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <div className="modal share-modal" role="dialog" aria-modal="true" aria-labelledby="share-title">
         <div className="share-head">
-          <h2 id="share-title">Share chat</h2>
+          <h2 id="share-title">Share {noun}</h2>
           <button type="button" className="share-close" onClick={onClose} aria-label="Close"><X size={18} /></button>
         </div>
 
@@ -78,15 +82,17 @@ export default function ShareModal({ chat, messages, onClose, onCopied, onError,
         </div>
 
         <div className="share-toggle-row">
-          <span>{isShared ? 'Anyone with the link can view this chat' : 'Only you can currently open this link'}</span>
-          <button type="button" className={`share-toggle ${isShared ? 'on' : ''}`} role="switch" aria-checked={isShared} aria-label="Allow anyone with the link to view this chat" disabled={sharing} onClick={flipShare}>
+          <span>{isShared ? `Anyone with the link can view this ${noun}` : 'Only you can currently open this link'}</span>
+          <button type="button" className={`share-toggle ${isShared ? 'on' : ''}`} role="switch" aria-checked={isShared} aria-label={`Allow anyone with the link to view this ${noun}`} disabled={sharing} onClick={flipShare}>
             <span className="share-toggle-knob" />
           </button>
         </div>
 
+        {shareError && <p className="share-error" role="alert">{shareError}</p>}
+
         <div className="share-link">
           <Link2 size={15} />
-          <input type="text" readOnly value={url} aria-label="Chat link" onFocus={(event) => event.target.select()} />
+          <input type="text" readOnly value={url} aria-label="Link" onFocus={(event) => event.target.select()} />
         </div>
 
         <div className="share-actions">
@@ -100,7 +106,7 @@ export default function ShareModal({ chat, messages, onClose, onCopied, onError,
 
         <p className="share-note">
           {isShared
-            ? 'Anyone signed in with this link can view this conversation (read-only). Turn sharing off to make it private again.'
+            ? `Anyone with this link can view this ${noun} (read-only). Turn sharing off to make it private again.`
             : 'Turn sharing on so this link works for other people too. Until then it only opens for you.'}
         </p>
       </div>

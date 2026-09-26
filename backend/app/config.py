@@ -39,6 +39,15 @@ class Settings(BaseSettings):
     live_ws_max_message_size: int = 65536
     # Finalized segments waiting for Gemini. Beyond this, segments are kept and translated as the queue drains.
     live_translation_queue_size: int = 200
+    # Live pipeline concurrency: how many finalized sentences may be romanized / translated AT THE SAME TIME. Results are
+    # still shown in spoken order (see LiveSession._emit_ready). One slow Gemini call then delays only its own sentence.
+    live_pipeline_workers: int = 6
+    # A live Gemini call slower than this gets ONE duplicate request; whichever answers first wins. 0 = off (default):
+    # a duplicate spends extra requests, and Gemini quotas are per-minute (e.g. 15 requests/min on a free-tier key), so
+    # only turn this on for a key/plan with plenty of headroom.
+    live_gemini_hedge_seconds: float = 0.0
+    # Per-sentence timing diagnostics in the server log (segment numbers/ids and durations only - never any text).
+    live_timing_log: bool = True
     # 0 = no cap. The default (4 h) only exists so an abandoned session can never run forever.
     live_meeting_max_duration_seconds: int = 4 * 60 * 60
     # No message at all from the browser for this long = the connection is treated as dead.

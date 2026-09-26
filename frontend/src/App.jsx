@@ -3,6 +3,8 @@ import axios from 'axios';
 import ChatSidebar from './ChatSidebar';
 import DeleteModal from './DeleteModal';
 import MeetingChat from './MeetingChat';
+import ScrollToLatest from './ScrollToLatest';
+import { renameChat, renameMeetingChat } from './lib/renameApi';
 import ShareModal from './ShareModal';
 import VoiceBar from './VoiceBar';
 import {
@@ -20,12 +22,13 @@ import {
   setArchived, setPinned, setShared, sortChats, toApiMessage, toUiMessage,
 } from './lib/chatApi';
 import {
-  createMeetingChat, deleteMeetingChat, listMeetingChats, setMeetingChatArchived, setMeetingChatPinned,
+  createMeetingChat, deleteMeetingChat, listMeetingChats, setMeetingChatArchived, setMeetingChatPinned, setMeetingChatShared,
 } from './lib/meetingApi';
 
 const AUDIO_TIMEOUT_MS = 60000;
 const COLLAPSE_KEY = 'linguaai-sidebar-collapsed';
 const CHAT_PARAM = 'chatId';
+const MEETING_PARAM = 'meetingChatId';
 const CHAT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ERROR_VISIBLE_MS = 12000;
 
@@ -37,11 +40,31 @@ function readChatIdFromUrl() {
   } catch { return null; }
 }
 
+// A Meeting Chat is addressed the same way (?meetingChatId=<uuid>): a refresh reopens it, and its share link opens exactly it.
+function readMeetingChatIdFromUrl() {
+  try {
+    const id = new URLSearchParams(window.location.search).get(MEETING_PARAM);
+    return id && CHAT_ID_PATTERN.test(id) ? id : null;
+  } catch { return null; }
+}
+
+function writeMeetingChatIdToUrl(id, mode) {
+  if (mode === 'none') return;
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.delete(CHAT_PARAM);
+    if (id) url.searchParams.set(MEETING_PARAM, id); else url.searchParams.delete(MEETING_PARAM);
+    if (url.href === window.location.href) return;
+    window.history[mode === 'replace' ? 'replaceState' : 'pushState']({ meetingChatId: id }, '', url);
+  } catch { /* the address bar is a convenience; the app works without it */ }
+}
+
 // mode: 'push' adds a history entry, 'replace' rewrites the current one, 'none' leaves the address alone.
 function writeChatIdToUrl(id, mode) {
   if (mode === 'none') return;
   try {
     const url = new URL(window.location.href);
+    url.searchParams.delete(MEETING_PARAM); // a Translation Chat address never carries a Meeting Chat id
     if (id) url.searchParams.set(CHAT_PARAM, id); else url.searchParams.delete(CHAT_PARAM);
     if (url.href === window.location.href) return;
     window.history[mode === 'replace' ? 'replaceState' : 'pushState']({ chatId: id }, '', url);
@@ -64,8 +87,9 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
   // The URL is the source of truth for which chat to open, for guests too: a share link must work whether or not
   // the visitor is signed in. (Previously this was forced to null for guests, which is why a shared link opened
   // in an incognito window silently landed on a new/empty chat instead of ever asking the backend for anything.)
+  const [initialMeetingChatId] = useState(readMeetingChatIdFromUrl);
   const [initialChatId] = useState(() => {
-    const id = readChatIdFromUrl();
+    const id = initialMeetingChatId ? null : readChatIdFromUrl();
     console.log('[TranslyAI] URL chatId:', id);
     return id;
   });
@@ -80,8 +104,12 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
   // reopened from history) - MeetingChat.jsx then fetches and shows every result already saved inside it. The
   // normal chat that was active before entering this mode (activeId/messages) is never touched, so leaving
   // Meeting Chat mode just reveals whatever was already there - no explicit "restore" step needed.
-  const [meetingView, setMeetingView] = useState(null);
-  const [historyTab, setHistoryTab] = useState('translations'); // 'translations' | 'meetings' - sidebar switch
+  // owned: true when the chat is known to be ours (picked in our sidebar / created here). A Meeting Chat opened from the ADDRESS
+  // BAR has owned undefined: whether it is ours is decided once our own list has loaded (see isForeignMeeting below).
+  const [meetingView, setMeetingView] = useState(() => (initialMeetingChatId ? { chatId: initialMeetingChatId } : null));
+  const [meetingOwnerChecked, setMeetingOwnerChecked] = useState(!initialMeetingChatId);
+  const [meetingResults, setMeetingResults] = useState([]); // what the open Meeting Chat shows (for the share preview)
+  const [historyTab, setHistoryTab] = useState(initialMeetingChatId ? 'meetings' : 'translations'); // 'translations' | 'meetings' - sidebar switch
   const [meetingChats, setMeetingChats] = useState([]);
   const [meetingChatsLoading, setMeetingChatsLoading] = useState(true);
   const [meetingChatsError, setMeetingChatsError] = useState('');
@@ -126,6 +154,12 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
   // chat via its share link (loadMessages only succeeds for that case once it's owned by us or shared with us).
   // Guests are included: their own chat list is always empty, so a shared chat they're viewing is always "foreign".
   const isForeignChat = Boolean(activeId && !chatsLoading && !activeChat && !messagesLoading && !messagesError);
+  const activeMeetingChat = meetingView?.chatId ? meetingChats.find((chat) => chat.id === meetingView.chatId) || null : null;
+  // Someone else's shared Meeting Chat, opened from a link: not ours (our list never contains it) -> strictly read-only.
+  const isForeignMeeting = Boolean(meetingView?.chatId && !meetingView.owned && meetingOwnerChecked && !activeMeetingChat);
+  const meetingPreview = meetingResults.slice(0, 4).map((result, index) => ({
+    id: result.id, who: `Meeting ${index + 1}`, text: (result.translation || result.summary || '').split(/\n{2,}/)[0],
+  })).filter((item) => item.text);
   const busy = isLoading || isSaving;
   const limitReached = guest && guestCount >= GUEST_LIMIT;
   const freeLeft = Math.max(0, GUEST_LIMIT - guestCount);
@@ -159,11 +193,11 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
   // pin/archive/delete behavior as normal chats, just its own table (see supabase/meeting_chats.sql). Loaded
   // alongside chats so the Meetings tab has data ready the moment it's opened.
   const refreshMeetingChats = useCallback(async () => {
-    if (guest) { setMeetingChatsLoading(false); return; }
+    if (guest) { setMeetingChatsLoading(false); setMeetingOwnerChecked(true); return; }
     setMeetingChatsLoading(true); setMeetingChatsError('');
     try { setMeetingChats(sortChats(await listMeetingChats())); }
     catch (loadError) { setMeetingChatsError(`Couldn't load your meetings. ${loadError.message}`); }
-    finally { setMeetingChatsLoading(false); }
+    finally { setMeetingChatsLoading(false); setMeetingOwnerChecked(true); }
   }, [guest]);
 
   // On first load (including a hard refresh) reopen the chat named in the address bar - our own, or one shared
@@ -180,7 +214,8 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
   useEffect(() => {
     if (!openMeetingChatId) return;
     setHistoryTab('meetings');
-    setMeetingView({ chatId: openMeetingChatId });
+    setMeetingView({ chatId: openMeetingChatId, owned: true });
+    writeMeetingChatIdToUrl(openMeetingChatId, 'replace');
     refreshMeetingChats();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openMeetingChatId]);
@@ -190,6 +225,13 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
   // above, just for back/forward navigation instead of the first load).
   const popstateRef = useRef(() => {});
   popstateRef.current = () => {
+    const meetingId = readMeetingChatIdFromUrl();
+    if (meetingId) {
+      setShareOpen(false); setHistoryTab('meetings');
+      setMeetingView((current) => (current?.chatId === meetingId ? current : { chatId: meetingId, owned: meetingChats.some((chat) => chat.id === meetingId) || undefined }));
+      return;
+    }
+    if (meetingView) setMeetingView(null);
     const id = readChatIdFromUrl();
     if (id === activeIdRef.current) return;
     if (id) openChat(id, 'none'); else resetToNewChat('none');
@@ -303,7 +345,7 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
     // chat that was active before Meeting Chat opened would return early and never leave meeting mode.
     setMeetingView(null);
     setSidebarOpen(false);
-    if (chatId === activeIdRef.current) return;
+    if (chatId === activeIdRef.current) { writeChatIdToUrl(chatId, urlMode); return; } // drops a leftover ?meetingChatId
     setActive(chatId, urlMode); setMessages([]); setText(''); setAudioFile(null); setError(''); setEditingId(null); setShareOpen(false);
     loadMessages(chatId);
   };
@@ -312,14 +354,29 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
   // Opens an existing Meeting Chat inline, showing every result already saved inside it - the normal chat that
   // was active before this (activeId/messages), if any, is left completely untouched underneath, so leaving
   // Meeting Chat mode just reveals it again.
-  const selectMeetingChat = (chatId) => { setSidebarOpen(false); setMeetingView({ chatId }); };
+  const selectMeetingChat = (chatId) => { setSidebarOpen(false); setShareOpen(false); setMeetingView({ chatId, owned: true }); writeMeetingChatIdToUrl(chatId, 'push'); };
 
   // "New chat" while the Meetings tab is selected (point 5): opens a brand-new, empty Meeting Chat - nothing is
   // saved to the backend yet (see MeetingChat.jsx's chatId=null idle state); the chat only starts existing once
   // the first recording completes, exactly like a new Translation chat only exists once its first message is sent.
   const startNewMeetingChat = () => {
-    setSidebarOpen(false);
-    setMeetingView({ chatId: null });
+    setSidebarOpen(false); setShareOpen(false);
+    setMeetingView({ chatId: null, owned: true });
+    writeMeetingChatIdToUrl(null, 'push');
+  };
+
+  // Rename (Translation Chats and Meeting Chats alike): optimistic like pin/archive, reverted with a message if it fails.
+  const renameChatTitle = async (chat, title) => {
+    const previous = chat.title;
+    setError(''); patchChat(chat.id, { title });
+    try { patchChat(chat.id, await renameChat(chat.id, title)); }
+    catch (actionError) { patchChat(chat.id, { title: previous }); setError(`Couldn't rename the chat. ${actionError.message}`); }
+  };
+  const renameMeetingChatTitle = async (chat, title) => {
+    const previous = chat.title;
+    setError(''); patchMeetingChat(chat.id, { title });
+    try { patchMeetingChat(chat.id, await renameMeetingChat(chat.id, title)); }
+    catch (actionError) { patchMeetingChat(chat.id, { title: previous }); setError(`Couldn't rename the meeting chat. ${actionError.message}`); }
   };
 
   const toggleMeetingChatPin = async (chat) => {
@@ -344,7 +401,7 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
   const removeMeetingChat = async (chat) => {
     setError('');
     setMeetingChats((current) => current.filter((item) => item.id !== chat.id));
-    if (meetingView?.chatId === chat.id) setMeetingView(null);
+    if (meetingView?.chatId === chat.id) { setMeetingView(null); setShareOpen(false); writeMeetingChatIdToUrl(null, 'replace'); }
     try { await deleteMeetingChat(chat.id); }
     catch (actionError) { setError(`Couldn't delete the meeting chat. ${actionError.message}`); refreshMeetingChats(); }
   };
@@ -353,9 +410,10 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
   // assigned it a real id - adds it to the sidebar immediately (optimistic; refreshMeetingChats below reconciles
   // it) and keeps Meeting Chat mode pointed at that same chat so later recordings in this session attach to it.
   const handleMeetingChatCreated = (chatId) => {
-    setMeetingView({ chatId });
+    setMeetingView({ chatId, owned: true });
+    writeMeetingChatIdToUrl(chatId, 'replace');
     setMeetingChats((current) => (current.some((chat) => chat.id === chatId) ? current : sortChats([
-      { id: chatId, title: 'New meeting', is_pinned: false, is_archived: false, created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+      { id: chatId, title: 'New meeting', is_pinned: false, is_archived: false, is_shared: false, created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
       ...current,
     ])));
   };
@@ -363,6 +421,16 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
   // Called after every completed recording (new chat or existing one) - refreshes the sidebar so ordering and
   // (once ready) the AI-generated title stay in sync with the backend.
   const handleMeetingResultSaved = () => { refreshMeetingChats(); };
+
+  // Same optimistic pattern as toggleShare for Translation Chats; only the owner's token can flip it (backend + RLS enforce it).
+  const toggleMeetingChatShare = async (chat, next) => {
+    patchMeetingChat(chat.id, { is_shared: next });
+    try { patchMeetingChat(chat.id, await setMeetingChatShared(chat.id, next)); }
+    catch (actionError) {
+      patchMeetingChat(chat.id, { is_shared: chat.is_shared }); // the switch goes back to what the server really has...
+      throw actionError; // ...and the Share dialog shows why (the page-level error banner is not part of the Meeting Chat screen)
+    }
+  };
 
   const togglePin = async (chat) => {
     const next = !chat.is_pinned;
@@ -677,13 +745,13 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
         activeId={activeId} isOpen={sidebarOpen} user={user} guest={guest} onRequestAuth={onRequestAuth}
         onSignOut={onSignOut} onProfileChange={onProfileChange}
         onNew={startNewChat} onSelect={selectChat} onClose={closeSidebar}
-        onTogglePin={togglePin} onToggleArchive={toggleArchive} onDelete={setDeleteTarget}
+        onTogglePin={togglePin} onToggleArchive={toggleArchive} onDelete={setDeleteTarget} onRenameChat={renameChatTitle}
         historyTab={historyTab} onHistoryTabChange={setHistoryTab}
         meetings={meetingChats} meetingsLoading={meetingChatsLoading} meetingsError={meetingChatsError}
         onRetryMeetings={refreshMeetingChats} activeMeetingChatId={meetingView?.chatId ?? null}
         onNewMeeting={startNewMeetingChat} onSelectMeeting={selectMeetingChat}
         onToggleMeetingPin={toggleMeetingChatPin} onToggleMeetingArchive={toggleMeetingChatArchive}
-        onDeleteMeeting={removeMeetingChat}
+        onDeleteMeeting={removeMeetingChat} onRenameMeeting={renameMeetingChatTitle}
       />
       {/* Mobile only (hidden by CSS on larger screens): tapping the dimmed page closes the open sidebar. */}
       {sidebarOpen && <div className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} aria-hidden="true" />}
@@ -699,7 +767,10 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
               <button type="button" className="topbar-share" onClick={() => setShareOpen(true)} aria-label="Share chat"><Share size={16} />Share</button>
             )}
             {!meetingView && isForeignChat && <span className="topbar-shared-badge">Shared conversation</span>}
-            {meetingView && <span className="topbar-shared-badge">Meeting</span>}
+            {meetingView && !guest && activeMeetingChat && (
+              <button type="button" className="topbar-share" onClick={() => setShareOpen(true)} aria-label="Share meeting chat"><Share size={16} />Share</button>
+            )}
+            {isForeignMeeting && <span className="topbar-shared-badge">Shared meeting</span>}
             {!user && (
               <div className="topbar-auth flex items-center gap-2">
                 <button type="button" className={CTA_LOGIN} onClick={() => onRequestAuth('login')}>Log in</button>
@@ -708,16 +779,22 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
             )}
           </div>
         </header>
-        {meetingView ? (
+        {meetingView && meetingView.chatId && !meetingView.owned && !meetingOwnerChecked ? (
+          <section className="conversation" aria-live="polite"><div className="conversation-status"><LoaderCircle size={18} className="spin" />Loading meeting chat...</div></section>
+        ) : meetingView ? (
           <MeetingChat
-            key={meetingView.chatId || 'new-meeting'}
+            key={`${meetingView.chatId || 'new-meeting'}${isForeignMeeting ? '-shared' : ''}`}
             chatId={meetingView.chatId}
+            title={activeMeetingChat?.title || ''}
+            readOnly={isForeignMeeting}
+            onResultsChange={setMeetingResults}
             onCopy={copyWithToast}
             onChatCreated={handleMeetingChatCreated}
             onResultSaved={handleMeetingResultSaved}
           />
         ) : (
           <>
+            <div className="scroll-pane">
             <section className="conversation" aria-live="polite" ref={conversationRef}>
               {messagesLoading
                 ? <div className="conversation-status"><LoaderCircle size={18} className="spin" />Loading conversation...</div>
@@ -733,6 +810,8 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
                     : <EmptyState greeting={greeting} onPrompt={(prompt) => setText(prompt)} />}
               {pending && pending.chatId === activeId && <Thinking />}
             </section>
+            <ScrollToLatest scrollRef={conversationRef} />
+            </div>
             <div className="composer-wrap flex w-full flex-col items-center justify-center">
               {/* One centred, responsive column holds the bar, banners and the disclaimer. */}
               <div className="relative mx-auto w-full max-w-3xl px-4">
@@ -772,7 +851,14 @@ function App({ user, guest = false, onRequestAuth = () => {}, onSignOut, onProfi
           </>
         )}
       </main>
-      {shareOpen && activeChat && (
+      {shareOpen && meetingView && activeMeetingChat && (
+        <ShareModal
+          chat={activeMeetingChat} noun="meeting chat" previewItems={meetingPreview} onClose={() => setShareOpen(false)}
+          onCopied={() => showToast('Link copied')} onError={() => setError("Couldn't copy the link. Please copy it from the address bar.")}
+          onToggleShare={(next) => toggleMeetingChatShare(activeMeetingChat, next)}
+        />
+      )}
+      {shareOpen && !meetingView && activeChat && (
         <ShareModal
           chat={activeChat} messages={messages} onClose={() => setShareOpen(false)}
           onCopied={() => showToast('Link copied')} onError={() => setError("Couldn't copy the link. Please copy it from the address bar.")}
@@ -857,7 +943,7 @@ function Message({ message, editing, canEdit, onCopy, onStartEdit, onCancelEdit,
   }
   const { result } = message;
   if (!result) return null;
-  return <div className="message-row assistant-row"><div className="avatar assistant-avatar"><Sparkles size={15} /></div><div className="assistant-content"><div className="assistant-label">TranslyAi</div><div className="translation-card"><div className="result-heading"><span>English translation</span><button type="button" className="mini-action" aria-label="Copy translation" title="Copy" onClick={() => onCopy(result.english_translation, 'Translation copied')}><Copy size={14} /></button></div>{paragraphs(result.english_translation).map((paragraph, index) => <p key={index}>{paragraph}</p>)}</div><div className="summary-card"><div className="summary-heading"><Sparkles size={14} />TranslyAi summary</div><SummaryText text={result.summary} /></div><div className="message-actions"><button type="button" aria-label="Copy response" title="Copy" onClick={() => onCopy(`${result.english_translation}\n\n${result.summary.replace(/\*\*/g, '')}`)}><Copy size={14} /></button><button type="button" aria-label="Email response" title="Email" onClick={() => openGmailCompose('TranslyAI Translation', buildEmailBody(result.english_translation, result.summary))}><Mail size={14} /></button></div></div></div>;
+  return <div className="message-row assistant-row"><div className="avatar assistant-avatar"><Sparkles size={15} /></div><div className="assistant-content"><div className="assistant-label">TranslyAi</div><div className="translation-card"><div className="result-heading"><span>English translation</span></div>{paragraphs(result.english_translation).map((paragraph, index) => <p key={index}>{paragraph}</p>)}</div><div className="summary-card"><div className="summary-heading"><Sparkles size={14} />Summary</div><SummaryText text={result.summary} /></div><div className="response-actions"><button type="button" className="response-action" aria-label="Copy response" title="Copy response" onClick={() => onCopy(buildEmailBody(result.english_translation, result.summary), 'Response copied')}><Copy size={15} /></button><button type="button" className="response-action" aria-label="Email response" title="Email response" onClick={() => openGmailCompose('TranslyAI Translation', buildEmailBody(result.english_translation, result.summary))}><Mail size={15} /></button></div></div></div>;
 }
 
 const paragraphs = (text) => String(text || '').split(/\n{2,}/).map((part) => part.trim()).filter(Boolean);

@@ -11,7 +11,7 @@ export async function syncStatusBar(theme) {
   if (!isNative) return;
   try {
     const { StatusBar, Style } = await import('@capacitor/status-bar');
-    await StatusBar.setBackgroundColor({ color: theme === 'light' ? '#ffffff' : '#18181b' });
+    await StatusBar.setBackgroundColor({ color: theme === 'light' ? '#ffffff' : '#060606' });
     await StatusBar.setStyle({ style: theme === 'light' ? Style.Dark : Style.Light });
   } catch { /* cosmetic only - never block the app over it */ }
 }

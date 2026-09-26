@@ -14,6 +14,7 @@ from uuid import UUID
 import httpx
 
 from app.config import settings
+from app.services.chat_store import user_id_from_token
 
 
 class MeetingChatStoreError(Exception):
@@ -102,7 +103,15 @@ class MeetingChatStore:
 
     @classmethod
     async def get_chat(cls, token: str, chat_id: UUID | str) -> Optional[dict]:
-        rows = await cls._request("GET", "/meeting_chats", token, params={"select": "*", "id": f"eq.{chat_id}"})
+        """The caller's OWN Meeting Chat. Row-level security also lets anyone READ a chat its owner shared (that is what a share
+        link needs), so ownership is filtered explicitly here: every route that adds to or changes a chat goes through this
+        method, and someone else's shared chat must look exactly like a chat that does not exist. (The public read-only view
+        uses get_shared_chat instead.)"""
+        params = {"select": "*", "id": f"eq.{chat_id}"}
+        owner = user_id_from_token(token)
+        if owner:
+            params["user_id"] = f"eq.{owner}"
+        rows = await cls._request("GET", "/meeting_chats", token, params=params)
         return rows[0] if rows else None
 
     @classmethod
@@ -125,6 +134,24 @@ class MeetingChatStore:
         extra query here."""
         rows = await cls._request("DELETE", "/meeting_chats", token, params={"id": f"eq.{chat_id}"})
         return bool(rows)
+
+    @classmethod
+    async def get_shared_chat(cls, chat_id: UUID | str) -> Optional[dict]:
+        """Public, login-free read of ONE Meeting Chat - only when its owner flagged it is_shared = true. Same pattern as
+        ChatStore.get_shared_chat: the project's anon key is the credential (what an unauthenticated browser would send);
+        the is_shared filter is explicit and redundant with the RLS policy on purpose. Owner ids are never selected."""
+        rows = await cls._request(
+            "GET", "/meeting_chats", settings.supabase_anon_key.strip(),
+            params={"select": "id,title,is_pinned,is_archived,is_shared,created_at,updated_at", "id": f"eq.{chat_id}", "is_shared": "eq.true"},
+        )
+        return rows[0] if rows else None
+
+    @classmethod
+    async def list_shared_results(cls, chat_id: UUID | str) -> list[dict]:
+        """Results of a chat already confirmed shared, via the get_shared_meeting_results SQL function (public fields only)."""
+        return await cls._request(
+            "POST", "/rpc/get_shared_meeting_results", settings.supabase_anon_key.strip(), body={"p_chat_id": str(chat_id)},
+        ) or []
 
     @classmethod
     async def list_results(cls, token: str, user_id: Optional[str], chat_id: UUID | str) -> list[dict]:
