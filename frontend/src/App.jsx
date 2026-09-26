@@ -4,6 +4,7 @@ import ChatSidebar from './ChatSidebar';
 import DeleteModal from './DeleteModal';
 import MeetingChat from './MeetingChat';
 import ScrollToLatest from './ScrollToLatest';
+import { withBold } from './lib/richText';
 import { renameChat, renameMeetingChat } from './lib/renameApi';
 import ShareModal from './ShareModal';
 import VoiceBar from './VoiceBar';
@@ -943,17 +944,11 @@ function Message({ message, editing, canEdit, onCopy, onStartEdit, onCancelEdit,
   }
   const { result } = message;
   if (!result) return null;
-  return <div className="message-row assistant-row"><div className="avatar assistant-avatar"><Sparkles size={15} /></div><div className="assistant-content"><div className="assistant-label">TranslyAi</div><div className="translation-card"><div className="result-heading"><span>English translation</span></div>{paragraphs(result.english_translation).map((paragraph, index) => <p key={index}>{paragraph}</p>)}</div><div className="summary-card"><div className="summary-heading"><Sparkles size={14} />Summary</div><SummaryText text={result.summary} /></div><div className="response-actions"><button type="button" className="response-action" aria-label="Copy response" title="Copy response" onClick={() => onCopy(buildEmailBody(result.english_translation, result.summary), 'Response copied')}><Copy size={15} /></button><button type="button" className="response-action" aria-label="Email response" title="Email response" onClick={() => openGmailCompose('TranslyAI Translation', buildEmailBody(result.english_translation, result.summary))}><Mail size={15} /></button></div></div></div>;
+  return <div className="message-row assistant-row"><div className="avatar assistant-avatar"><Sparkles size={15} /></div><div className="assistant-content"><div className="assistant-label">TranslyAi</div><div className="translation-card"><div className="result-heading"><span>English translation</span></div>{paragraphs(result.english_translation).map((paragraph, index) => <p key={index}>{withBold(paragraph)}</p>)}</div><div className="summary-card"><div className="summary-heading"><Sparkles size={14} />Summary</div><SummaryText text={result.summary} /></div><div className="response-actions"><button type="button" className="response-action" aria-label="Copy response" title="Copy response" onClick={() => onCopy(buildEmailBody(result.english_translation, result.summary), 'Response copied')}><Copy size={15} /></button><button type="button" className="response-action" aria-label="Email response" title="Email response" onClick={() => openGmailCompose('TranslyAI Translation', buildEmailBody(result.english_translation, result.summary))}><Mail size={15} /></button></div></div></div>;
 }
 
 const paragraphs = (text) => String(text || '').split(/\n{2,}/).map((part) => part.trim()).filter(Boolean);
 
-// Renders **bold** lead-ins as <strong>; everything else stays plain text.
-function withBold(line) {
-  return line.split(/(\*\*[^*]+\*\*)/g).map((part, index) => (part.startsWith('**') && part.endsWith('**') && part.length > 4
-    ? <strong key={index}>{part.slice(2, -2)}</strong>
-    : part));
-}
 
 // Summaries arrive as "• **Topic:** detail" lines. Older saved chats hold plain sentences, which stay as a paragraph.
 function SummaryText({ text }) {

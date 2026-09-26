@@ -8,6 +8,7 @@ import LiveMeeting from './LiveMeeting';
 import { cancelLiveMeeting } from './lib/liveMeetingApi';
 import ScrollToLatest from './ScrollToLatest';
 import StructuredSummary from './StructuredSummary';
+import { withBold } from './lib/richText';
 import {
   cancelMeetingJob, fetchSharedMeetingChat, generateMeetingChatTitle, getMeetingStatus, listMeetingChatResults, startMeeting, uploadMeetingRecording,
 } from './lib/meetingApi';
@@ -62,7 +63,7 @@ function MeetingResultCard({ result, onCopy }) {
     <div className="meeting-result">
       <div className="translation-card">
         <div className="result-heading"><span>English translation</span></div>
-        {result.translation.split(/\n{2,}/).filter(Boolean).map((paragraph, index) => <p key={index}>{paragraph}</p>)}
+        {result.translation.split(/\n{2,}/).filter(Boolean).map((paragraph, index) => <p key={index}>{withBold(paragraph)}</p>)}
       </div>
       <div className="summary-card">
         <div className="summary-heading"><Users size={14} />Summary</div>

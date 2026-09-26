@@ -3,6 +3,7 @@ import { ArrowDown, Check, CircleAlert, LoaderCircle, Users } from 'lucide-react
 import AuthPage from './AuthPage';
 import BrandMark from './BrandMark';
 import StructuredSummary from './StructuredSummary';
+import { withBold } from './lib/richText';
 import { formatDuration } from './lib/duration';
 import {
   claimLiveMeeting, clearPendingClaim, LiveViewerSocket, readPendingClaim, savePendingClaim,
@@ -209,7 +210,7 @@ export default function LiveViewer({ shareToken }) {
           <div className="live-final">
             <div className="translation-card">
               <div className="result-heading"><span>Translation</span></div>
-              {final.segments.map((segment) => <p key={segment.segment_id}>{segment.translation}</p>)}
+              {final.segments.map((segment) => <p key={segment.segment_id}>{withBold(segment.translation)}</p>)}
             </div>
             <div className="summary-card">
               <div className="summary-heading"><Users size={14} />Summary</div>
